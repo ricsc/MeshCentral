@@ -4678,7 +4678,7 @@
       ]
     },
     {
-      "en": "ARMVIRT32 (OpenWRT)",
+      "en": "Teltonika RUTX ARM/MUSL",
       "xloc": [
         "default-mobile.handlebars->53->50",
         "default.handlebars->119->57",
