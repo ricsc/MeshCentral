@@ -5161,7 +5161,7 @@ module.exports.CreateMeshUser = function (parent, db, ws, req, args, domain, use
                             if (type == 'csv') {
                                 try {
                                     // Create the CSV file
-                                    output = 'id,name,rname,host,icon,ip,osdesc,groupname,av,update,firewall,bitlocker,avdetails,tags,lastbootuptime,cpu,osbuild,biosDate,biosVendor,biosVersion,biosSerial,biosMode,boardName,boardVendor,boardVersion,productUuid,tpmversion,tpmmanufacturer,tpmmanufacturerversion,tpmisactivated,tpmisenabled,tpmisowned,totalMemory,agentOpenSSL,agentCommitDate,agentCommitHash,agentCompileTime,netIfCount,macs,addresses,lastConnectTime,lastConnectAddr\r\n';
+                                    output = 'id,name,rname,host,icon,ip,osdesc,groupname,av,update,firewall,bitlocker,avdetails,tags,lastbootuptime,cpu,osbuild,biosDate,biosVendor,biosVersion,biosSerial,biosMode,boardName,boardVendor,boardVersion,boardSerial,chassisSerial,chassisAssetTag,chassisManufacturer,productUuid,tpmversion,tpmmanufacturer,tpmmanufacturerversion,tpmisactivated,tpmisenabled,tpmisowned,totalMemory,agentOpenSSL,agentCommitDate,agentCommitHash,agentCompileTime,netIfCount,macs,addresses,lastConnectTime,lastConnectAddr\r\n';
                                     for (var i = 0; i < results.length; i++) {
                                         const nodeinfo = results[i];
 
@@ -5222,6 +5222,14 @@ module.exports.CreateMeshUser = function (parent, db, ws, req, args, domain, use
                                             output += ',';
                                             if (nodeinfo.sys.hardware.identifiers && (nodeinfo.sys.hardware.identifiers.board_version)) { output += csvClean(nodeinfo.sys.hardware.identifiers.board_version); }
                                             output += ',';
+                                            if (nodeinfo.sys.hardware.identifiers && (nodeinfo.sys.hardware.identifiers.board_serial)) { output += csvClean(nodeinfo.sys.hardware.identifiers.board_serial); }
+                                            output += ',';
+                                            if (nodeinfo.sys.hardware.identifiers && (nodeinfo.sys.hardware.identifiers.chassis_serial)) { output += csvClean(nodeinfo.sys.hardware.identifiers.chassis_serial); }
+                                            output += ',';
+                                            if (nodeinfo.sys.hardware.identifiers && (nodeinfo.sys.hardware.identifiers.chassis_assettag)) { output += csvClean(nodeinfo.sys.hardware.identifiers.chassis_assettag); }
+                                            output += ',';
+                                            if (nodeinfo.sys.hardware.identifiers && (nodeinfo.sys.hardware.identifiers.chassis_manufacturer)) { output += csvClean(nodeinfo.sys.hardware.identifiers.chassis_manufacturer); }
+                                            output += ',';
                                             if (nodeinfo.sys.hardware.identifiers && (nodeinfo.sys.hardware.identifiers.product_uuid)) { output += csvClean(nodeinfo.sys.hardware.identifiers.product_uuid); }
                                             output += ',';
                                             if (nodeinfo.sys.hardware.tpm && nodeinfo.sys.hardware.tpm.SpecVersion) { output += csvClean(nodeinfo.sys.hardware.tpm.SpecVersion); }
@@ -5262,6 +5270,10 @@ module.exports.CreateMeshUser = function (parent, db, ws, req, args, domain, use
                                             if (nodeinfo.sys.hardware.mobile && (nodeinfo.sys.hardware.mobile.brand)) { output += csvClean(nodeinfo.sys.hardware.mobile.brand); }
                                             output += ',';
                                             output += ',';
+                                            output += ',';
+                                            output += ',';
+                                            output += ',';
+                                            output += ',';
                                             if (nodeinfo.sys.hardware.mobile && (nodeinfo.sys.hardware.mobile.id)) { output += csvClean(nodeinfo.sys.hardware.mobile.id); }
                                             output += ',';
                                             output += ',';
@@ -5292,6 +5304,14 @@ module.exports.CreateMeshUser = function (parent, db, ws, req, args, domain, use
                                             output += ',';
                                             if (nodeinfo.sys.hardware.linux && (nodeinfo.sys.hardware.linux.board_version)) { output += csvClean(nodeinfo.sys.hardware.linux.board_version); }
                                             output += ',';
+                                            if (nodeinfo.sys.hardware.linux && (nodeinfo.sys.hardware.linux.board_serial)) { output += csvClean(nodeinfo.sys.hardware.linux.board_serial); }
+                                            output += ',';
+                                            if (nodeinfo.sys.hardware.linux && (nodeinfo.sys.hardware.linux.chassis_serial)) { output += csvClean(nodeinfo.sys.hardware.linux.chassis_serial); }
+                                            output += ',';
+                                            if (nodeinfo.sys.hardware.linux && (nodeinfo.sys.hardware.linux.chassis_assettag)) { output += csvClean(nodeinfo.sys.hardware.linux.chassis_assettag); }
+                                            output += ',';
+                                            if (nodeinfo.sys.hardware.linux && (nodeinfo.sys.hardware.linux.chassis_manufacturer)) { output += csvClean(nodeinfo.sys.hardware.linux.chassis_manufacturer); }
+                                            output += ',';
                                             if (nodeinfo.sys.hardware.linux && (nodeinfo.sys.hardware.linux.product_uuid)) { output += csvClean(nodeinfo.sys.hardware.linux.product_uuid); }
                                             output += ',';
                                             if (nodeinfo.sys.hardware.tpm && nodeinfo.sys.hardware.tpm.SpecVersion) { output += csvClean(nodeinfo.sys.hardware.tpm.SpecVersion); }
@@ -5319,7 +5339,7 @@ module.exports.CreateMeshUser = function (parent, db, ws, req, args, domain, use
                                                 }
                                             }
                                         } else {
-                                            output += ',,,,,,,,,,,,,,,,,,';
+                                            output += ',,,,,,,,,,,,,,,,,,,,,,';
                                         }
 
                                         // Agent information
@@ -5786,6 +5806,7 @@ module.exports.CreateMeshUser = function (parent, db, ws, req, args, domain, use
                         if (db.changeStream) { event.noact = 1; } // If DB change stream is active, don't use this event to change the user. Another event will come.
                         parent.parent.DispatchEvent(targets, obj, event);
                     }
+                    parent.InvalidateNodeCache(newuser, node.meshid, node._id)
                 }
             }
     
@@ -5804,7 +5825,6 @@ module.exports.CreateMeshUser = function (parent, db, ws, req, args, domain, use
                 if (db.changeStream) { event.noact = 1; } // If DB change stream is active, don't use this event to change the mesh. Another event will come.
                 parent.parent.DispatchEvent(dispatchTargets, obj, event);
             }
-    
             if (command.responseid != null) { obj.send({ action: 'adddeviceuser', responseid: command.responseid, result: 'ok' }); }
         });
     }
@@ -5924,6 +5944,7 @@ module.exports.CreateMeshUser = function (parent, db, ws, req, args, domain, use
                 parent.parent.DispatchEvent(parent.CreateMeshDispatchTargets(mesh, [user._id, newuserid]), obj, event);
                 if (command.remove === true) { msgs.push("Removed user " + newuserid.split('/')[2]); } else { msgs.push("Added user " + newuserid.split('/')[2]); }
                 successCount++;
+                parent.InvalidateNodeCache(newuser, mesh)
             } else {
                 msgs.push("Unknown user " + newuserid.split('/')[2]);
                 unknownUsers.push(newuserid.split('/')[2]);
@@ -6501,7 +6522,28 @@ module.exports.CreateMeshUser = function (parent, db, ws, req, args, domain, use
                         for (var i in doc.hardware.windows.volumes) { delete doc.hardware.windows.volumes[i].recoveryPassword; }
                     }
 
-                    if (command.nodeinfo === true) { doc.node = node; doc.rights = rights; }
+                    if (command.nodeinfo === true) {
+                        doc.node = node;
+                        doc.rights = rights;
+                        // Remove any connectivity and power state information, that should not be in the database anyway.
+                        // TODO: Find why these are sometimes saved in the db.
+                        if (doc.node.conn != null) { delete doc.node.conn; }
+                        if (doc.node.pwr != null) { delete doc.node.pwr; }
+                        if (doc.node.agct != null) { delete doc.node.agct; }
+                        if (doc.node.cict != null) { delete doc.node.cict; }
+                        // Add the connection state
+                        var state = parent.parent.GetConnectivityState(doc.nodeid);
+                        if (state) {
+                            doc.node.conn = state.connectivity;
+                            doc.node.pwr = state.powerState;
+                            if ((state.connectivity & 1) != 0) { var agent = parent.wsagents[doc.nodeid]; if (agent != null) { doc.node.agct = agent.connectTime; } }
+                            // Use the connection time of the CIRA/Relay connection
+                            if ((state.connectivity & 2) != 0) {
+                                var ciraConnection = parent.parent.mpsserver.GetConnectionToNode(doc.nodeid, null, true);
+                                if ((ciraConnection != null) && (ciraConnection.tag != null)) { doc.node.cict = ciraConnection.tag.connectTime; }
+                            }
+                        }
+                    }
                     obj.send(doc);
                 } else {
                     obj.send({ action: 'getsysinfo', nodeid: node._id, tag: command.tag, noinfo: true, result: 'Invalid device id' });
