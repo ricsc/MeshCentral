@@ -578,6 +578,9 @@
                             onclick="account_manageImage(0)" src="images/user-256.png" />
                         <div><a href=# onclick="account_manageImage(0)">Change image</a></div>
                     </div>
+                    <div id="p2userIdInfo" style="margin-top:15px">
+                        <strong>User ID:</strong> <span id="p2userIdDisplay"></span>
+                    </div>
                     <div id="p2AccountSecurity" style="display:none">
                         <p><strong>Account security</strong></p>
                         <div style="margin-left:25px">
@@ -18305,6 +18308,10 @@
             if (user == null) { go(4); return; }
             QH('p30userName', EscapeHtml(user.name));
             QH('p31userName', EscapeHtml(user.name));
+            // Display user identifier
+            var shortuserid = user._id.split('/')[2];
+            var userIdDisplay = shortuserid;
+            QH('p2userIdDisplay', userIdDisplay);
             var self = (user._id == userinfo._id), activeSessions = 0;
             if (wssessions != null && wssessions[user._id]) { activeSessions = wssessions[user._id]; }
 
