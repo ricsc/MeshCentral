@@ -2315,6 +2315,10 @@
             if (((siteRights & 8) == 0) && (xxcurrentView == 5)) { setDialogMode(0); go(1); }
             if (currentNode != null) { gotoDevice(currentNode._id, xxcurrentView, true); }
 
+            // Update user id
+            var userIdDisplay = userinfo._id;
+            QH('p2userIdDisplay', userIdDisplay);
+
             // Update user image
             if ((userinfo.flags != null) && (userinfo.flags & 1)) {
                 if (userinfo.accountImageRnd == null) { userinfo.accountImageRnd = Math.floor(Math.random() * 9999999999); }
