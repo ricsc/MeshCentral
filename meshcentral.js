@@ -1431,7 +1431,7 @@ function CreateMeshCentralServer(config, args) {
         var i;
 
         // Add NodeJS version warning if needed
-        if (Number(process.version.match(/^v(\d+\.\d+)/)[1]) < 16) { addServerWarning("MeshCentral will require Node v16 or above in the future, your current version is " + process.version + "."); }
+        if (Number(process.version.match(/^v(\d+\.\d+)/)[1]) < 20) { addServerWarning("MeshCentral will require Node v20 or above in the future, your current version is " + process.version + "."); }
 
         // Setup certificate operations
         obj.certificateOperations = require('./certoperations.js').CertificateOperations(obj);
@@ -4392,7 +4392,7 @@ function mainStart() {
             if (typeof config.settings.autobackup.googledrive == 'object') { modules.push('googleapis@128.0.0'); }
             // Enable WebDAV Support
             if (typeof config.settings.autobackup.webdav == 'object') {
-                if ((typeof config.settings.autobackup.webdav.url != 'string') || (typeof config.settings.autobackup.webdav.username != 'string') || (typeof config.settings.autobackup.webdav.password != 'string')) { addServerWarning("Missing WebDAV parameters.", 2, null, !args.launch); } else { modules.push('webdav@5.8.0'); }
+                if ((typeof config.settings.autobackup.webdav.url != 'string') || (typeof config.settings.autobackup.webdav.username != 'string') || (typeof config.settings.autobackup.webdav.password != 'string')) { addServerWarning("Missing WebDAV parameters.", 2, null, !args.launch); } else { modules.push('webdav@5.9.0'); }
             }
             // Enable S3 Support
             if (typeof config.settings.autobackup.s3 == 'object') { modules.push('minio@8.0.6'); }

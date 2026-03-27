@@ -96,10 +96,14 @@
           }
         },
         "sqlite3": {
-          "type": [ "boolean", "string", "object" ],
+          "type": [
+            "boolean",
+            "string",
+            "object"
+          ],
           "default": false,
           "description": "Set boolean true to use SQLite3 as a local MeshCentral database with default db filename 'meshcentral' or enter a string for a different db filename. Extension .sqlite is appended",
-          "properties":{
+          "properties": {
             "name": {
               "type": "string",
               "default": "meshcentral",
@@ -453,6 +457,17 @@
           "type": "boolean",
           "default": false,
           "description": "When enabled, the MeshCentral web site can be embedded within another website's iframe."
+        },
+        "allowedFramingOrigins": {
+          "type": [
+            "array",
+            "string"
+          ],
+          "items": {
+            "type": "string"
+          },
+          "default": null,
+          "description": "List of origins allowed to embed MeshCentral in an iframe. Uses Content-Security-Policy frame-ancestors. 'self' is always included. Example: [\"https://rmm.example.com\"]. Comma-separated string also supported."
         },
         "cookieIpCheck": {
           "type": [
@@ -920,7 +935,7 @@
               "default": 10,
               "description": "How many days of backups should the autobackup keep? Default is 10 Days worth"
             },
-            "zipCompression" : {
+            "zipCompression": {
               "type": "integer",
               "default": "5",
               "description": "Set the zip compression level, 1=fast/less small file to 9=slow/smallest file."
@@ -956,7 +971,7 @@
               "default": [],
               "description": "Glob for ignoring files in the data directory. For example [\"**/*.log\"] !! If a string instead of an array is passed, it will be split by ',' so *{.txt,.log} won't work in that case !! Don't do string..."
             },
-            "backupSkipFoldersGlob":{
+            "backupSkipFoldersGlob": {
               "type": "array",
               "default": [],
               "description": "Glob for ignoring directories in the data directory. For example [\"**/signedagents\"]"
@@ -1363,7 +1378,7 @@
             "items": {
               "type": "string"
             },
-            "description": "When set, new accounts will be added to these siteadmin rights."
+            "description": "Default server rights assigned to newly created accounts. Accepted values: fulladmin, manageusers, serverbackup, serverrestore, serverupdate, fileaccess, locked, nonewgroups, nonewdevices, notools, usergroups, recordings, locksettings, allevents"
           },
           "allowedOrigin": {
             "type": [
@@ -1809,7 +1824,11 @@
               "fidopininput": {
                 "type": "string",
                 "default": "preferred",
-                "enum": ["preferred", "required", "discouraged"],
+                "enum": [
+                  "preferred",
+                  "required",
+                  "discouraged"
+                ],
                 "description": "Controls FIDO PIN prompt behavior: 'preferred' (asks only if key requires PIN), 'required' (always asks for PIN), or 'discouraged' (never asks for PIN). Default: 'preferred'."
               },
               "allowaccountreset": {
@@ -2491,8 +2510,18 @@
                 "type": "boolean",
                 "description": "When set to true, the remote desktop feature is view only.",
                 "default": "false"
+              },
+              "disableconnectall": {
+                "type": "boolean",
+                "description": "When set to true, the 'Connect All','Disconnect All' and 'Auto' buttons are removed from the desktop tab.",
+                "default": "false"
               }
             }
+          },
+          "upninsteadofuser": {
+            "type": "boolean",
+            "default": false,
+            "description": "When set to true, the UPN (User Principal Name) is shown instead of the username in the device General tab active users list."
           },
           "amtScanOptions": {
             "description": "List of local network Intel AMT scanning options offered in the user interface. For example [\"LabNetwork 192.168.15.0/23\", \"SalesNetwork 192.168.8.0/24\"].",
@@ -2918,6 +2947,17 @@
               "secret"
             ]
           },
+          "allowedFramingOrigins": {
+            "type": [
+              "array",
+              "string"
+            ],
+            "items": {
+              "type": "string"
+            },
+            "default": null,
+            "description": "Per-domain override. List of origins allowed to embed this domain in an iframe. Uses Content-Security-Policy frame-ancestors. Overrides settings.allowedFramingOrigins when set."
+          },
           "httpHeaders": {
             "type": "object",
             "additionalProperties": {
@@ -3209,7 +3249,7 @@
                     "items": {
                       "type": "string"
                     },
-                    "description": "When set, new accounts will be added to these siteadmin rights."
+                    "description": "Default server rights assigned to newly created accounts. Accepted values: fulladmin, manageusers, serverbackup, serverrestore, serverupdate, fileaccess, locked, nonewgroups, nonewdevices, notools, usergroups, recordings, locksettings, allevents"
                   },
                   "clientid": {
                     "type": "string",
@@ -3261,7 +3301,7 @@
                     "items": {
                       "type": "string"
                     },
-                    "description": "When set, new accounts will be added to these siteadmin rights."
+                    "description": "Default server rights assigned to newly created accounts. Accepted values: fulladmin, manageusers, serverbackup, serverrestore, serverupdate, fileaccess, locked, nonewgroups, nonewdevices, notools, usergroups, recordings, locksettings, allevents"
                   },
                   "clientid": {
                     "type": "string",
@@ -3313,7 +3353,7 @@
                     "items": {
                       "type": "string"
                     },
-                    "description": "When set, new accounts will be added to these siteadmin rights."
+                    "description": "Default server rights assigned to newly created accounts. Accepted values: fulladmin, manageusers, serverbackup, serverrestore, serverupdate, fileaccess, locked, nonewgroups, nonewdevices, notools, usergroups, recordings, locksettings, allevents"
                   },
                   "clientid": {
                     "type": "string",
@@ -3385,7 +3425,7 @@
                     "items": {
                       "type": "string"
                     },
-                    "description": "When set, new accounts will be added to these siteadmin rights."
+                    "description": "Default server rights assigned to newly created accounts. Accepted values: fulladmin, manageusers, serverbackup, serverrestore, serverupdate, fileaccess, locked, nonewgroups, nonewdevices, notools, usergroups, recordings, locksettings, allevents"
                   },
                   "clientid": {
                     "type": "string",
@@ -3442,7 +3482,7 @@
                     "items": {
                       "type": "string"
                     },
-                    "description": "When set, new accounts will be added to these siteadmin rights."
+                    "description": "Default server rights assigned to newly created accounts. Accepted values: fulladmin, manageusers, serverbackup, serverrestore, serverupdate, fileaccess, locked, nonewgroups, nonewdevices, notools, usergroups, recordings, locksettings, allevents"
                   },
                   "entityid": {
                     "type": "string",
@@ -3505,7 +3545,7 @@
                     "items": {
                       "type": "string"
                     },
-                    "description": "When set, new accounts will be added to these siteadmin rights."
+                    "description": "Default server rights assigned to newly created accounts. Accepted values: fulladmin, manageusers, serverbackup, serverrestore, serverupdate, fileaccess, locked, nonewgroups, nonewdevices, notools, usergroups, recordings, locksettings, allevents"
                   },
                   "entityid": {
                     "type": "string",
@@ -3587,7 +3627,7 @@
                     "items": {
                       "type": "string"
                     },
-                    "description": "When set, new accounts will be added to these siteadmin rights."
+                    "description": "Default server rights assigned to newly created accounts. Accepted values: fulladmin, manageusers, serverbackup, serverrestore, serverupdate, fileaccess, locked, nonewgroups, nonewdevices, notools, usergroups, recordings, locksettings, allevents"
                   },
                   "clientid": {
                     "type": "string",
@@ -3688,9 +3728,12 @@
                         ]
                       },
                       "post_logout_redirect_uri": {
-                        "type": "string",
+                        "type": [
+                          "string",
+                          "boolean"
+                        ],
                         "format": "uri",
-                        "description": "URI for your IdP to send you after logging out of IdP via MeshCentral. (Default is https:[currentHost][currentPath]/login)"
+                        "description": "URI for your IdP to send you after logging out of IdP via MeshCentral. (Default is https:[currentHost][currentPath]/login) OR set to false to not send a post logout redirect_uri"
                       },
                       "default_max_age": {
                         "type": "number",
@@ -3926,6 +3969,24 @@
                           "google"
                         ]
                       },
+                      "buttonText": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 128,
+                        "description": "Custom text for the OIDC login buttons shown on the login page (tooltip only). Minimum 1 character, maximum 128 characters."
+                      },
+                      "buttonIconUrl": {
+                        "type": "string",
+                        "description": "URL to a hosted icon for standard displays (supports PNG, JPEG, WEBP, GIF, ICO, SVG). The server validates remote images before use; if validation fails the UI falls back to local login icons. Used for both 1x and 2x if buttonIconUrl2x is not set.",
+                        "format": "uri",
+                        "pattern": "^[hH][tT][tT][pP][sS]?://"
+                      },
+                      "buttonIconUrl2x": {
+                        "type": "string",
+                        "description": "Optional URL to a higher resolution icon for 2x/high-DPI displays. If not set, buttonIconUrl is used for both. The server validates remote images before use.",
+                        "format": "uri",
+                        "pattern": "^[hH][tT][tT][pP][sS]?://"
+                      },
                       "tenant_id": {
                         "type": "string",
                         "description": "REQUIRED FOR AZURE PRESET: Tenantid for Azure"
@@ -3933,6 +3994,14 @@
                       "customer_id": {
                         "type": "string",
                         "description": "REQUIRED IF USING GROUPS: Customer ID from Google Workspace Admin Console (https://admin.google.com/ac/accountsettings/profile)"
+                      },
+                      "authorities": {
+                        "type": "array",
+                        "description": "Default value is groups. Roles can be used in azure to assign app permissions",
+                        "items": {
+                          "type": "string",
+                          "enum": ["groups", "roles"]
+                        }
                       }
                     }
                   },
@@ -3988,6 +4057,10 @@
                         "description": "Custom claim to use."
                       }
                     }
+                  },
+                  "options": {
+                    "type": "object",
+                    "description": "Custom options to pass to the OpenID Client"
                   }
                 }
               }
@@ -4051,7 +4124,7 @@
         "custom": {
           "type": "object",
           "description": "If this object is set, we will use a custom acme server with custom kid and hmackey for SSL creation instead of Let's Encrypt",
-          "required": [ 
+          "required": [
             "server",
             "kid",
             "hmackey"

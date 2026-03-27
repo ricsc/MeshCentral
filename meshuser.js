@@ -552,7 +552,20 @@ module.exports.CreateMeshUser = function (parent, db, ws, req, args, domain, use
 
             // Build server information object
             const allFeatures = parent.getDomainUserFeatures(domain, user, req);
-            var serverinfo = { domain: domain.id, name: domain.dns ? domain.dns : parent.certificates.CommonName, mpsname: parent.certificates.AmtMpsName, mpsport: mpsport, mpspass: args.mpspass, port: httpport, emailcheck: ((domain.mailserver != null) && (domain.auth != 'sspi') && (domain.auth != 'ldap') && (args.lanonly != true) && (parent.certificates.CommonName != null) && (parent.certificates.CommonName.indexOf('.') != -1) && (user._id.split('/')[2].startsWith('~') == false)), domainauth: (domain.auth == 'sspi'), serverTime: Date.now(), features: allFeatures.features, features2: allFeatures.features2 };
+            var serverinfo = { 
+                domain: domain.id,
+                name: domain.dns ? domain.dns : parent.certificates.CommonName,
+                mpsname: parent.certificates.AmtMpsName,
+                mpsport: mpsport,
+                mpspass: args.mpspass,
+                port: httpport,
+                emailcheck: ((domain.mailserver != null) && (domain.auth != 'sspi') && (domain.auth != 'ldap') && (args.lanonly != true) && (parent.certificates.CommonName != null) && (parent.certificates.CommonName.indexOf('.') != -1) && (user._id.split('/')[2].startsWith('~') == false)),
+                domainauth: (domain.auth == 'sspi'),
+                serverTime: Date.now(),
+                features: allFeatures.features,
+                features2: allFeatures.features2,
+                features3: allFeatures.features3
+            };
             serverinfo.languages = parent.renderLanguages;
             serverinfo.tlshash = Buffer.from(parent.webCertificateFullHashs[domain.id], 'binary').toString('hex').toUpperCase(); // SHA384 of server HTTPS certificate
             serverinfo.agentCertHash = parent.agentCertificateHashBase64;
@@ -4728,6 +4741,96 @@ module.exports.CreateMeshUser = function (parent, db, ws, req, args, domain, use
                 parent.parent.pluginHandler.removePlugin(command.id, function(){
                     parent.db.getPlugins(function(err, docs) {
                         try { ws.send(JSON.stringify({ action: 'updatePluginList', list: docs, result: err })); } catch (ex) { } 
+                    });
+                });
+                break;
+            }
+            case 'reloadplugin': {
+                if ((user.siteadmin != SITERIGHT_ADMIN) || (parent.parent.pluginHandler == null)) break; // Must be full admin with plugins enabled
+                if (command.plugin == "ALL") {
+                    // Reload all plugins
+                    parent.parent.pluginHandler.reloadAllPlugins(function(result) {
+                        try { ws.send(JSON.stringify({ action: 'pluginReloaded', result: result })); } catch (ex) { }
+                    });
+                } else {
+                    // Reload specific plugin
+                    parent.parent.pluginHandler.reloadPlugin(command.plugin, function(result) {
+                        try { ws.send(JSON.stringify({ action: 'pluginReloaded', result: result })); } catch (ex) { }
+                    });
+                }
+                break;
+            }
+            case 'getpluginpermissions': {
+                if ((user.siteadmin != SITERIGHT_ADMIN) || (parent.parent.pluginHandler == null)) break; // Must be full admin
+                var perms = parent.parent.pluginHandler.getPluginPermissions(command.plugin);
+                try { ws.send(JSON.stringify({ action: 'pluginPermissions', plugin: command.plugin, permissions: perms })); } catch (ex) { }
+                break;
+            }
+            case 'setpluginpermissions': {
+                if ((user.siteadmin != SITERIGHT_ADMIN) || (parent.parent.pluginHandler == null)) break; // Must be full admin
+                parent.parent.pluginHandler.setPluginPermissions(command.plugin, command.data, function(err) {
+                    try { ws.send(JSON.stringify({ action: 'pluginPermissionsSet', plugin: command.plugin, success: !err, error: err })); } catch (ex) { }
+                });
+                break;
+            }
+            case 'getpluginpermissionlist': {
+                // Return list of users, user groups, meshes, nodes for permission assignment UI
+                if ((user.siteadmin != SITERIGHT_ADMIN) || (parent.parent.pluginHandler == null)) break;
+                
+                var result = { users: [], userGroups: [], meshes: [], nodes: [] };
+                
+                // Get all users
+                parent.db.GetAllType('user', function(err, docs) {
+                    if (docs) {
+                        docs.forEach(function(u) {
+                            if (u.name && u._id) {
+                                result.users.push({ _id: u._id, name: u.name, email: u.email });
+                            }
+                        });
+                    }
+                    
+                    // Get all user groups
+                    parent.db.GetAllType('ugrp', function(err, ugrps) {
+                        if (ugrps) {
+                            ugrps.forEach(function(ug) {
+                                if (ug.name && ug._id) {
+                                    result.userGroups.push({ _id: ug._id, name: ug.name });
+                                }
+                            });
+                        }
+                        
+                        // Get all meshes (device groups)
+                        parent.db.GetAllType('mesh', function(err, meshes) {
+                            if (meshes) {
+                                meshes.forEach(function(m) {
+                                    if (m.name && m._id && !m.deleted) {
+                                        result.meshes.push({ _id: m._id, name: m.name });
+                                    }
+                                });
+                            }
+                            
+                            // Get all nodes (devices)
+                            parent.db.GetAllType('node', function(err, nodes) {
+                                if (nodes) {
+                                    // Create a map of meshid to meshname for grouping
+                                    var meshMap = {};
+                                    if (meshes) {
+                                        meshes.forEach(function(m) {
+                                            meshMap[m._id] = m.name;
+                                        });
+                                    }
+                                    
+                                    nodes.forEach(function(n) {
+                                        if (n.name && n._id && !n.deleted) {
+                                            var meshname = meshMap[n.meshid] || 'Ungrouped';
+                                            result.nodes.push({ _id: n._id, name: n.name, meshid: n.meshid, meshname: meshname });
+                                        }
+                                    });
+                                }
+                                
+                                try { ws.send(JSON.stringify({ action: 'pluginPermissionList', list: result })); } catch (ex) { }
+                            });
+                        });
                     });
                 });
                 break;

@@ -137,6 +137,23 @@ function getDomainInfo() {
     return (ret);
 }
 
+function getLoggedOnUserBySessionId(sessionId) {
+    try {
+        const result = require('win-registry').QueryKey(require('win-registry').HKEY.LocalMachine,
+            ("SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Authentication\\LogonUI\\SessionData\\" + sessionId), 'LoggedOnUser'
+        );
+
+        if (result) {
+            return result.replace(/^[^\\]+\\/, '');
+        }
+
+        return null;
+
+    } catch (err) {
+        return null;
+    }
+}
+
 function getLogonCacheKeys() {
     var registry = require('win-registry');
     var HKLM = registry.HKEY.LocalMachine;
@@ -799,7 +816,11 @@ function onUserSessionChanged(user, locked) {
                 }  
             } else if (a[i].Domain != null) {
                 if (ret != null && ret.PartOfDomain === true) {
-                    meshCoreObj.upnusers.push(a[i].Username + '@' + ret.Domain);
+					var loggedOnUser = getLoggedOnUserBySessionId(a[i].SessionId);
+                    if(loggedOnUser == null || (/^[^@]+@[^@]+\.[^@]+$/.test(loggedOnUser) == false)){
+                        loggedOnUser = a[i].Username + '@' + ret.Domain;
+                    }
+                    meshCoreObj.upnusers.push(loggedOnUser);
                 } else if (getJoinState() == 4) { // One account with Microsoft Account
                     var userobj = getLogonCacheKeys();
                     if(userobj && userobj.length > 0){
@@ -939,32 +960,43 @@ var getIpLocationDataExInProgress = false;
 var getIpLocationDataExCounts = [0, 0];
 function getIpLocationDataEx(func) {
     if (getIpLocationDataExInProgress == true) { return false; }
-    try {
         getIpLocationDataExInProgress = true;
         getIpLocationDataExCounts[0]++;
-        var options = http.parseUri("http://ipinfo.io/json");
+
+    function tryEndpoint(url, fallback) {
+        var options = http.parseUri(url);
         options.method = 'GET';
         http.request(options, function (resp) {
-            if (resp.statusCode == 200) {
-                var geoData = '';
-                resp.data = function (geoipdata) { geoData += geoipdata; };
+            var geoData = '';
+            resp.data = function (chunk) { geoData += chunk; };
                 resp.end = function () {
-                    var location = null;
                     try {
-                        if (typeof geoData == 'string') {
-                            var result = JSON.parse(geoData);
-                            if (result.ip && result.loc) { location = result; }
+                        var result = JSON.parse(geoData);
+                        if (result.ip && result.loc) {
+                            getIpLocationDataExInProgress = false;
+                            getIpLocationDataExCounts[1]++;
+                            func(result);
+                            return;
                         }
                     } catch (ex) { }
-                    if (func) { getIpLocationDataExCounts[1]++; func(location); }
-                }
-            } else
-            { func(null); }
-            getIpLocationDataExInProgress = false;
+                    if (fallback) { fallback(); } else { done(null); }
+                };
+            if (resp.statusCode != 200) { if (fallback) { fallback(); } else { done(null); } }
+        }).on('error', function () {
+            if (fallback) { fallback(); } else { done(null); }
         }).end();
-        return true;
     }
-    catch (ex) { return false; }
+
+    function done(result) {
+        getIpLocationDataExInProgress = false;
+        if (func) { func(result); }
+    }
+
+    tryEndpoint('http://v6.ipinfo.io/json', function () {
+        tryEndpoint('http://ipinfo.io/json', null);
+    });
+
+    return true;
 }
 
 // Remove all Gateway MAC addresses for interface list. This is useful because the gateway MAC is not always populated reliably.
@@ -1558,14 +1590,14 @@ function handleServerCommand(data) {
                         if (require('MeshAgent').isService) {
                             require('clipboard').dispatchRead().then(function (str) {
                                 if (str) {
-                                    MeshServerLogEx(21, [str.length], "Getting clipboard content, " + str.length + " byte(s)", data);
+                                    if (data.tag != 3) { MeshServerLogEx(21, [str.length], "Getting clipboard content, " + str.length + " byte(s)", data); }
                                     mesh.SendCommand({ action: 'msg', type: 'getclip', sessionid: data.sessionid, data: str, tag: data.tag });
                                 }
                             });
                         } else {
                             require('clipboard').read().then(function (str) {
                                 if (str) {
-                                    MeshServerLogEx(21, [str.length], "Getting clipboard content, " + str.length + " byte(s)", data);
+                                    if (data.tag != 3) { MeshServerLogEx(21, [str.length], "Getting clipboard content, " + str.length + " byte(s)", data); }
                                     mesh.SendCommand({ action: 'msg', type: 'getclip', sessionid: data.sessionid, data: str, tag: data.tag });
                                 }
                             });
@@ -2123,7 +2155,7 @@ function getSystemInformation(func) {
     } catch (ex) { func(null, ex); }
 }
 
-// Get a formated response for a given directory path
+// Get a formatted response for a given directory path
 function getDirectoryInfo(reqpath) {
     var response = { path: reqpath, dir: [] };
     if (((reqpath == undefined) || (reqpath == '')) && (process.platform == 'win32')) {
@@ -2684,6 +2716,7 @@ function terminal_promise_consent_resolved()
             var env = { HISTCONTROL: 'ignoreboth' };
             if (process.env['LANG']) { env['LANG'] = process.env['LANG']; }
             if (process.env['PATH']) { env['PATH'] = process.env['PATH']; }
+            env['MESHCENTRAL_USER'] = (this.httprequest.userid ? this.httprequest.userid.split('/')[2] : (this.httprequest.guestuserid ? 'deviceshare:' + this.httprequest.guestuserid.split('/')[2] : 'unknown'));
             if (this.httprequest.xoptions)
             {
                 if (this.httprequest.xoptions.rows) { env.LINES = ('' + this.httprequest.xoptions.rows); }
@@ -4195,11 +4228,12 @@ function processConsoleCommand(cmd, args, rights, sessionid) {
                 if (require('os').dns != null) { availcommands += ',dnsinfo'; }
                 try { require('linux-dhcp'); availcommands += ',dhcp'; } catch (ex) { }
                 if (process.platform == 'win32') {
-                    availcommands += ',bitlocker,cs,wpfhwacceleration,uac,volumes,rdpport,deskbackground,domaininfo';
+                    availcommands += ',bitlocker,cs,wpfhwacceleration,uac,volumes,rdpport,domaininfo';
                     if (bcdOK()) { availcommands += ',safemode'; }
                     if (require('notifybar-desktop').DefaultPinned != null) { availcommands += ',privacybar'; }
                     try { require('win-utils'); availcommands += ',taskbar'; } catch (ex) { }
                     try { require('win-info'); availcommands += ',installedapps,qfe,defender,av,installedstoreapps'; } catch (ex) { }
+                    try { require('win-deskutils'); availcommands += ',mousetrails,idletime,deskbackground'; } catch (ex) { }
                 }
                 if (amt != null) { availcommands += ',amt,amtconfig,amtevents'; }
                 if (process.platform != 'freebsd') { availcommands += ',vm'; }
@@ -4252,6 +4286,10 @@ function processConsoleCommand(cmd, args, rights, sessionid) {
                         response = 'Proper usage: deskbackground [path]';
                         break;
                 }
+                break;
+            case 'idletime':
+                try { require('win-deskutils'); } catch (ex) { response = 'Unknown command "idletime", type "help" for list of available commands.'; break; }
+                require('win-deskutils').idle.getSecondsAllSessions().then(function (seconds) { sendConsoleText((seconds === -1 ? 'No active users' : 'Idle time for all sessions: ' + seconds + ' seconds'), sessionid); });
                 break;
             case 'taskbar':
                 try { require('win-utils'); } catch (ex) { response = 'Unknown command "taskbar", type "help" for list of available commands.'; break; }
@@ -6221,7 +6259,7 @@ function handleServerConnection(state) {
         LastPeriodicServerUpdate = null;
         sendPeriodicServerUpdate(null, true);
         if (selfInfoUpdateTimer == null) {
-            selfInfoUpdateTimer = setInterval(sendPeriodicServerUpdate, 1200000); // 20 minutes
+            selfInfoUpdateTimer = setInterval(sendPeriodicServerUpdate, 300000); // 5 minutes
             selfInfoUpdateTimer.metadata = 'meshcore (InfoUpdate Timer)';
         }
 
@@ -6331,6 +6369,14 @@ function sendPeriodicServerUpdate(flags, force) {
             meshCoreObj.defender = require('win-info').defender();
             meshCoreObjChanged();
         } catch (ex) { }
+
+        // Calculate Windows Idle Time
+        try {
+            require('win-deskutils').idle.getSecondsAllSessions().then(function (seconds) {
+                meshCoreObj.idletime = seconds;
+                meshCoreObjChanged();
+            });
+        } catch (ex) { sendConsoleText('Error getting idle time: ' + ex.toString());}
     }
 
     // Send available data right now
