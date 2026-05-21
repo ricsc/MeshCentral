@@ -1453,6 +1453,11 @@
               }
             }
           },
+          "softwareInventory": {
+              "type": "boolean",
+              "default": false,
+              "description": "When set to true, the Software Inventory feature is enabled."
+            },
           "autoRemoveInactiveDevices": {
             "type": "integer",
             "default": 0,
@@ -1950,6 +1955,15 @@
             "type": "boolean",
             "default": false,
             "description": "When enabled, device groups will be collapsed by default in the devices tab."
+          },
+          "terminalUserVariable": {
+            "type": "string",
+            "enum": [
+              "realname",
+              "identifier",
+              "username"
+            ],
+            "description": "Adds MESHCENTRAL_USER environment variable to linux terminal sessions using either 'realname', 'identifier', or 'username'."
           },
           "userSessionsSort": {
             "type": "string",

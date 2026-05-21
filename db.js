@@ -241,7 +241,7 @@ module.exports.CreateDB = function (parent, func) {
                                     obj.Remove('si' + node._id);                          // Remove system information
                                     obj.Remove('al' + node._id);                          // Remove error log last time
                                     if (obj.RemoveSMBIOS) { obj.RemoveSMBIOS(node._id); } // Remove SMBios data
-                                    obj.RemoveAllNodeEvents(node._id);                    // Remove all events for this node
+                                    obj.RemoveAllNodeEvents(node.domain, node._id);       // Remove all events for this node
                                     obj.removeAllPowerEventsForNode(node._id);            // Remove all power events for this node
                                     if (typeof node.pmt == 'string') { obj.Remove('pmt_' + node.pmt); } // Remove Push Messaging Token
                                     obj.Get('ra' + node._id, function (err, nodes) {
@@ -267,7 +267,7 @@ module.exports.CreateDB = function (parent, func) {
                                                     parent.DispatchEvent(targets, obj, event);
                                                 }
                                             } else if (i.startsWith('ugrp/')) {
-                                                var cusergroup = parent.userGroups[i];
+                                                var cusergroup = parent.webserver.userGroups[i];
                                                 if ((cusergroup != null) && (cusergroup.links != null) && (cusergroup.links[node._id] != null)) {
                                                     // Remove the user link & save the user
                                                     delete cusergroup.links[node._id];
@@ -454,7 +454,7 @@ module.exports.CreateDB = function (parent, func) {
 
                         } else if (obj.databaseType == DB_POSTGRESQL) {
                             // Postgres
-                            sqlDbQuery('DELETE FROM Main WHERE ((extra != NULL) AND (extra LIKE (\'mesh/%\')) AND (extra != ANY ($1)))', [meshlist], function (err, response) { });
+                            sqlDbQuery('DELETE FROM main WHERE extra LIKE \'mesh/%\' AND extra <> ALL ($1)', [meshlist], function (err, response) { });
                         } else if ((obj.databaseType == DB_MARIADB) || (obj.databaseType == DB_MYSQL)) {
                             // MariaDB
                             sqlDbQuery('DELETE FROM Main WHERE (extra LIKE ("mesh/%") AND (extra NOT IN ?)', [meshlist], function (err, response) { });
@@ -768,6 +768,7 @@ module.exports.CreateDB = function (parent, func) {
                     sqlDbExec('CREATE INDEX ndxeventsusername ON events(domain, userid, time)', null, function (err, response) { });
                     sqlDbExec('CREATE INDEX ndxeventsdomainnodeidtime ON events(domain, nodeid, time)', null, function (err, response) { });
                     sqlDbExec('CREATE INDEX ndxeventids ON eventids(target)', null, function (err, response) { });
+					sqlDbExec('CREATE INDEX ndxeventidsfkid ON eventids(fkid)', null, function (err, response) { });
                     sqlDbExec('CREATE INDEX ndxserverstattime ON serverstats (time)', null, function (err, response) { });
                     sqlDbExec('CREATE INDEX ndxserverstatexpire ON serverstats (expire)', null, function (err, response) { });
                     sqlDbExec('CREATE INDEX ndxpowernodeidtime ON power (nodeid, time)', null, function (err, response) { });
@@ -3463,6 +3464,13 @@ module.exports.CreateDB = function (parent, func) {
             child_process.exec(cmd, { cwd: backupPath }, function (error, stdout, stderr) {
                 if ((error != null) && (error != '')) {
                         func(1, "Mongodump error, backup will not be performed. Check path or use mongodumppath & mongodumpargs");
+						
+						let processedError = error;
+						if (typeof parent?.config?.settings?.postgres?.password === "string" &&	parent.config.settings.postgres.password.length > 0) {
+							processedError = encodeURIComponent(processedError.replaceAll(parent.config.settings.postgres.password, "****"));
+						}
+						parent.debug('backup', 'MongoDB/MongoJS DumpTool: ' + processedError);			
+						
                         return;
                 } else {parent.config.settings.autobackup.backupintervalhours = backupInterval;}
             });
@@ -3474,6 +3482,13 @@ module.exports.CreateDB = function (parent, func) {
             child_process.exec(cmd, { cwd: backupPath, timeout: 1000*30 }, function(error, stdout, stdin) {
                 if ((error != null) && (error != '')) {
                         func(1, "mysqldump error, backup will not be performed. Check path or use mysqldumppath");
+						
+						let processedError = error;
+						if (typeof parent?.config?.settings?.postgres?.password === "string" &&	parent.config.settings.postgres.password.length > 0) {
+							processedError = encodeURIComponent(processedError.replaceAll(parent.config.settings.postgres.password, "****"));
+						}
+						parent.debug('backup', 'MariaDB/MySQL DumpTool: ' + processedError);
+						
                         return;
                 } else {parent.config.settings.autobackup.backupintervalhours = backupInterval;}
 
@@ -3489,6 +3504,13 @@ module.exports.CreateDB = function (parent, func) {
             child_process.exec(cmd, { cwd: backupPath }, function(error, stdout, stdin) {
                 if ((error != null) && (error != '')) {
                         func(1, "pg_dump error, backup will not be performed. Check path or use pgdumppath.");
+						
+						let processedError = error;
+						if (typeof parent?.config?.settings?.postgres?.password === "string" &&	parent.config.settings.postgres.password.length > 0) {
+							processedError = encodeURIComponent(processedError.replaceAll(parent.config.settings.postgres.password, "****"));
+						}
+						parent.debug('backup', 'PostgreSQL DumpTool: ' + processedError);				
+						
                         return;
                 } else {parent.config.settings.autobackup.backupintervalhours = backupInterval;}
             });        

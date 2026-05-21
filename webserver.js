@@ -2970,7 +2970,7 @@ module.exports.CreateWebServer = function (parent, db, args, certificates, doneF
 
         // If set and there is no user logged in, redirect the root page. Make sure not to redirect if /login is used
         if ((typeof domain.unknownuserrootredirect == 'string') && ((req.session == null) || (req.session.userid == null))) {
-            var q = require('url').parse(req.url, true);
+            var q = new URL(req.url, 'http://localhost');
             if (!q.pathname.endsWith('/login')) { res.redirect(domain.unknownuserrootredirect + getQueryPortion(req)); return; }
         }
 
@@ -6439,8 +6439,8 @@ module.exports.CreateWebServer = function (parent, db, args, certificates, doneF
     obj.CheckWebServerOriginName = function (domain, req) {
         if (domain.allowedorigin === true) return true; // Ignore origin
         if (typeof req.headers.origin != 'string') return true; // No origin in the header, this is a desktop app
-        const originUrl = require('url').parse(req.headers.origin, true);
-        if (typeof originUrl.hostname != 'string') return false; // Origin hostname is not valid
+        let originUrl; try { originUrl = new URL(req.headers.origin); } catch (ex) { return false; }
+        if (!originUrl.hostname) return false; // Origin hostname is not valid
         if (Array.isArray(domain.allowedorigin)) return (domain.allowedorigin.indexOf(originUrl.hostname) >= 0); // Check if this is an allowed origin from an explicit list
         if (obj.isTrustedCert(domain) === false) return true; // This server does not have a trusted certificate.
         if (domain.dns != null) return (domain.dns == originUrl.hostname); // Match the domain DNS
@@ -8501,26 +8501,28 @@ module.exports.CreateWebServer = function (parent, db, args, certificates, doneF
                     if((Array.isArray(strategy.custom.authorities) && strategy.custom.authorities.filter(x => x.trim().length > 0).length > 0) == false || strategy.custom.authorities.includes('groups')) { 
                         getGroups(user.preset, tokenset).then((groups) => {
                             user = Object.assign(user, { 'groups': groups });
-                            //done(null, user);
+							if(strategy.custom.authorities && strategy.custom.authorities.includes('roles')){
+                                // Check also for roles
+		                        user.groups = (user.groups || []).concat(user.roles);
+		                    }
+		                    parent.authLog('oidcCallback',`OIDC: USER GROUPS/ROLES: ${JSON.stringify(user)}`);
+		                    done(null, user);
                         }).catch((err) => {
                             let error = new Error('OIDC: GROUPS: No groups found due to error:', { cause: err });
                             parent.debug('error', `${JSON.stringify(error)}`);
                             parent.authLog('oidcCallback', error.message);
                             user.groups = [];
-                            //done(null, user);
+                            done(null, user);
                         });
-                    }
-                    if(strategy.custom.authorities.includes('roles')){
-                        if(user.roles){
-                            if(!strategy.custom.authorities.includes('groups')){
-                                user.groups = user.roles;
-                            } else {
-                                user.groups = (user.groups || []).concat(user.roles);
-                            }
+                    
+                    } else if (Array.isArray(strategy.custom.authorities) && strategy.custom.authorities.includes('roles')) {
+                        // Only roles are requested
+                        if (user.roles) {
+                            user.groups = user.roles;
                         }
-                    }
-                    parent.authLog('OIDC: USER GROUPS/ROLES:', user);
-                    done(null, user);
+                        parent.authLog('OIDC: USER ROLES:', user);
+                        done(null, user);
+                    }  
                 } else {
                     done(null, user);
                 }
