@@ -688,6 +688,9 @@
                             onclick="account_manageImage(0)" src="images/user-256.png" />
                         <div><a href=# onclick="account_manageImage(0)">Change image</a></div>
                     </div>
+                    <div id="p2userIdInfo" style="margin-top:15px">
+                        <strong>User ID:</strong> <span id="p2userIdDisplay"></span>
+                    </div>
                     <div id="p2AccountSecurity" style="display:none">
                         <p><strong>Account security</strong></p>
                         <div style="margin-left:25px">
@@ -3293,6 +3296,10 @@
             QV('LeftMenuMyFiles', siteRights & 8);
             if (((siteRights & 8) == 0) && (xxcurrentView == 5)) { setDialogMode(0); go(1); }
             if (currentNode != null) { gotoDevice(currentNode._id, xxcurrentView, true); }
+
+            // Update user id
+            var userIdDisplay = userinfo._id;
+            QH('p2userIdDisplay', userIdDisplay);
 
             // Update user image
             if ((userinfo.flags != null) && (userinfo.flags & 1)) {
