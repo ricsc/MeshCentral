@@ -402,6 +402,7 @@ function destopLockHelper_pipe(httprequest) {
 var obj = { serverInfo: {} };
 var agentFileHttpRequests = {}; // Currently active agent HTTPS GET requests from the server.
 var agentFileHttpPendingRequests = []; // Pending HTTPS GET requests from the server.
+var agentFileHttpAgent = null; // HTTP agent for these requests, see serverFetchFile().
 var debugConsole = (global._MSH && (_MSH().debugConsole == 1));
 
 var color_options =
@@ -556,7 +557,7 @@ function trimResults(val) {
 obj.DAIPC = require('net').createServer();
 if (process.platform != 'win32') { try { require('fs').unlinkSync(process.cwd() + '/DAIPC'); } catch (ex) { } }
 obj.DAIPC.IPCPATH = process.platform == 'win32' ? ('\\\\.\\pipe\\' + require('_agentNodeId')() + '-DAIPC') : (process.cwd() + '/DAIPC');
-try { obj.DAIPC.listen({ path: obj.DAIPC.IPCPATH, writableAll: true, maxConnections: 5 }); } catch (ex) { }
+try { obj.DAIPC.listen({ path: obj.DAIPC.IPCPATH, writableAll: true, maxConnections: 5 }); obj.DAIPC._listenOk = true; } catch (ex) { obj.DAIPC._listenError = ex; }
 obj.DAIPC._daipc = [];
 obj.DAIPC.on('connection', function (c) {
     c._send = function (j) {
@@ -688,8 +689,45 @@ function removeRegisteredApp(pipe) {
 }
 
 function diagnosticAgent_uninstall() {
+    // Stop the Diagnostic Agent first and remember its folder, uninstallService() only removes the service and the executable
+    var workingPath = null;
+    try {
+        var diag = require('service-manager').manager.getService('meshagentDiagnostic');
+        workingPath = diag.appWorkingDirectory();
+        try { if (diag.isRunning()) { diag.stop(); } } catch (ex) { }
+        diag.close();
+    } catch (ex) { }
+
     require('service-manager').manager.uninstallService('meshagentDiagnostic');
     require('task-scheduler').delete('meshagentDiagnostic/periodicStart'); // TODO: Using "delete" here breaks the minifier since this is a reserved keyword
+
+    // Ask the server to remove the link between this agent and the Diagnostic Agent
+    try { require('MeshAgent').SendCommand({ action: 'diagnostic', value: { command: 'unregister' } }); } catch (ex) { }
+
+    if (process.platform == 'win32') {
+        // Remove the Diagnostic Agent certificates and private keys from the certificate store, using the current name and the name older versions used.
+        // Then remove its folder (database, log), only if it really is a "meshagentDiagnostic" folder. Wait 10 seconds so the service has stopped,
+        // and skip all of it if the Diagnostic Agent was installed again in the meantime, so we don't remove the new install.
+        var cleanup = [];
+        var subjects = ['meshagentDiagnostic_NodeDiagnosticCertificate', 'MeshNodeDiagnosticCertificate'];
+        for (var i in subjects) {
+            cleanup.push('certutil -user -delstore My "' + subjects[i] + '"');
+            cleanup.push('certutil -user -csp "Microsoft Platform Crypto Provider" -delkey "CN=' + subjects[i] + '_privatekey"');
+            cleanup.push('certutil -user -csp "Microsoft Software Key Storage Provider" -delkey "CN=' + subjects[i] + '_privatekey"');
+        }
+        if (typeof workingPath == 'string') {
+            var folder = workingPath.split('/').join('\\').replace(/\\+$/, '');
+            if (folder.split('\\').pop().toLowerCase() == 'meshagentdiagnostic') { cleanup.push('rmdir /S /Q "' + folder + '"'); }
+        }
+        var cmd = '/C CHOICE /C Y /N /D Y /T 10 & sc query meshagentDiagnostic >nul 2>&1 || (' + cleanup.join(' & ') + ')';
+        try { require('child_process').execFile(process.env['windir'] + '\\system32\\cmd.exe', [cmd], { type: 4, detached: true }); } catch (ex) { }
+    }
+}
+// On Windows, install the diagnostic agent next to the main agent folder, for example "C:\Program Files\<company>\meshagentDiagnostic\"
+function diagnosticAgent_installPath() {
+    if (process.platform != 'win32') return null;
+    var p = process.execPath.split('\\'); p.pop(); p.pop();
+    return p.join('\\') + '\\meshagentDiagnostic\\';
 }
 function diagnosticAgent_installCheck(install) {
     try {
@@ -706,20 +744,36 @@ function diagnosticAgent_installCheck(install) {
                 displayName: "Mesh Agent Diagnostic Service",
                 description: "Mesh Agent Diagnostic Service",
                 servicePath: process.execPath,
-                parameters: ['-recovery']
+                parameters: ['-recovery'],
+                installPath: diagnosticAgent_installPath()
                 //files: [{ newName: 'diagnostic.js', _buffer: Buffer.from('LyoNCkNvcHlyaWdodCAyMDE5IEludGVsIENvcnBvcmF0aW9uDQoNCkxpY2Vuc2VkIHVuZGVyIHRoZSBBcGFjaGUgTGljZW5zZSwgVmVyc2lvbiAyLjAgKHRoZSAiTGljZW5zZSIpOw0KeW91IG1heSBub3QgdXNlIHRoaXMgZmlsZSBleGNlcHQgaW4gY29tcGxpYW5jZSB3aXRoIHRoZSBMaWNlbnNlLg0KWW91IG1heSBvYnRhaW4gYSBjb3B5IG9mIHRoZSBMaWNlbnNlIGF0DQoNCiAgICBodHRwOi8vd3d3LmFwYWNoZS5vcmcvbGljZW5zZXMvTElDRU5TRS0yLjANCg0KVW5sZXNzIHJlcXVpcmVkIGJ5IGFwcGxpY2FibGUgbGF3IG9yIGFncmVlZCB0byBpbiB3cml0aW5nLCBzb2Z0d2FyZQ0KZGlzdHJpYnV0ZWQgdW5kZXIgdGhlIExpY2Vuc2UgaXMgZGlzdHJpYnV0ZWQgb24gYW4gIkFTIElTIiBCQVNJUywNCldJVEhPVVQgV0FSUkFOVElFUyBPUiBDT05ESVRJT05TIE9GIEFOWSBLSU5ELCBlaXRoZXIgZXhwcmVzcyBvciBpbXBsaWVkLg0KU2VlIHRoZSBMaWNlbnNlIGZvciB0aGUgc3BlY2lmaWMgbGFuZ3VhZ2UgZ292ZXJuaW5nIHBlcm1pc3Npb25zIGFuZA0KbGltaXRhdGlvbnMgdW5kZXIgdGhlIExpY2Vuc2UuDQoqLw0KDQp2YXIgaG9zdCA9IHJlcXVpcmUoJ3NlcnZpY2UtaG9zdCcpLmNyZWF0ZSgnbWVzaGFnZW50RGlhZ25vc3RpYycpOw0KdmFyIFJlY292ZXJ5QWdlbnQgPSByZXF1aXJlKCdNZXNoQWdlbnQnKTsNCg0KaG9zdC5vbignc2VydmljZVN0YXJ0JywgZnVuY3Rpb24gKCkNCnsNCiAgICBjb25zb2xlLnNldERlc3RpbmF0aW9uKGNvbnNvbGUuRGVzdGluYXRpb25zLkxPR0ZJTEUpOw0KICAgIGhvc3Quc3RvcCA9IGZ1bmN0aW9uKCkNCiAgICB7DQogICAgICAgIHJlcXVpcmUoJ3NlcnZpY2UtbWFuYWdlcicpLm1hbmFnZXIuZ2V0U2VydmljZSgnbWVzaGFnZW50RGlhZ25vc3RpYycpLnN0b3AoKTsNCiAgICB9DQogICAgUmVjb3ZlcnlBZ2VudC5vbignQ29ubmVjdGVkJywgZnVuY3Rpb24gKHN0YXR1cykNCiAgICB7DQogICAgICAgIGlmIChzdGF0dXMgPT0gMCkNCiAgICAgICAgew0KICAgICAgICAgICAgY29uc29sZS5sb2coJ0RpYWdub3N0aWMgQWdlbnQ6IFNlcnZlciBjb25uZWN0aW9uIGxvc3QuLi4nKTsNCiAgICAgICAgICAgIHJldHVybjsNCiAgICAgICAgfQ0KICAgICAgICBjb25zb2xlLmxvZygnRGlhZ25vc3RpYyBBZ2VudDogQ29ubmVjdGlvbiBFc3RhYmxpc2hlZCB3aXRoIFNlcnZlcicpOw0KICAgICAgICBzdGFydCgpOw0KICAgIH0pOw0KfSk7DQpob3N0Lm9uKCdub3JtYWxTdGFydCcsIGZ1bmN0aW9uICgpDQp7DQogICAgaG9zdC5zdG9wID0gZnVuY3Rpb24gKCkNCiAgICB7DQogICAgICAgIHByb2Nlc3MuZXhpdCgpOw0KICAgIH0NCiAgICBjb25zb2xlLmxvZygnTm9uIFNlcnZpY2UgTW9kZScpOw0KICAgIFJlY292ZXJ5QWdlbnQub24oJ0Nvbm5lY3RlZCcsIGZ1bmN0aW9uIChzdGF0dXMpDQogICAgew0KICAgICAgICBpZiAoc3RhdHVzID09IDApDQogICAgICAgIHsNCiAgICAgICAgICAgIGNvbnNvbGUubG9nKCdEaWFnbm9zdGljIEFnZW50OiBTZXJ2ZXIgY29ubmVjdGlvbiBsb3N0Li4uJyk7DQogICAgICAgICAgICByZXR1cm47DQogICAgICAgIH0NCiAgICAgICAgY29uc29sZS5sb2coJ0RpYWdub3N0aWMgQWdlbnQ6IENvbm5lY3Rpb24gRXN0YWJsaXNoZWQgd2l0aCBTZXJ2ZXInKTsNCiAgICAgICAgc3RhcnQoKTsNCiAgICB9KTsNCn0pOw0KaG9zdC5vbignc2VydmljZVN0b3AnLCBmdW5jdGlvbiAoKSB7IHByb2Nlc3MuZXhpdCgpOyB9KTsNCmhvc3QucnVuKCk7DQoNCg0KZnVuY3Rpb24gc3RhcnQoKQ0Kew0KDQp9Ow0K', 'base64') }]
             });
         svc = require('service-manager').manager.getService('meshagentDiagnostic');
     }
     catch (ex) { return null; }
     var proxyConfig = require('global-tunnel').proxyConfig;
-    var cert = require('MeshAgent').GenerateAgentCertificate('CN=MeshNodeDiagnosticCertificate');
+    // On Windows the certificate is kept in the certificate store, and the Diagnostic Agent looks it up by subject name.
+    // The agent uses "CN=<meshServiceName>_NodeDiagnosticCertificate", or "CN=MeshNodeDiagnosticCertificate" when meshServiceName is "Mesh Agent",
+    // so we set the Diagnostic Agent's meshServiceName below and generate the certificate with the matching subject, otherwise its node id would not match the registered one.
+    var diagServiceName = 'meshagentDiagnostic';
+    var cert = require('MeshAgent').GenerateAgentCertificate('CN=' + diagServiceName + '_NodeDiagnosticCertificate');
     var nodeid = require('tls').loadCertificate(cert.root).getKeyHash().toString('base64');
     ddb = require('SimpleDataStore').Create(svc.appWorkingDirectory().replace('\\', '/') + '/meshagentDiagnostic.db');
+    ddb.Put('meshServiceName', diagServiceName);
     ddb.Put('disableUpdate', '1');
     ddb.Put('MeshID', Buffer.from(require('MeshAgent').ServerInfo.MeshID, 'hex'));
     ddb.Put('ServerID', require('MeshAgent').ServerInfo.ServerID);
     ddb.Put('MeshServer', require('MeshAgent').ServerInfo.ServerUri);
+
+    // Tell the Diagnostic Agent the service name of this agent, so it works with customized agents
+    var mainServiceName = process.platform == 'win32' ? 'Mesh Agent' : 'meshagent';
+    try { if (global._MSH && _MSH().meshServiceName) { mainServiceName = _MSH().meshServiceName; } } catch (ex) { }
+    try {
+        var n = require('MeshAgent').serviceName;
+        if ((typeof n == 'string') && (n != '')) { mainServiceName = n; }
+    } catch (ex) { }
+    ddb.Put('0/mainAgentServiceName', mainServiceName); // the Diagnostic Agent reads its own data store with Shared(), which prefixes keys with "0/"
+    ddb.Put('mainAgentServiceName', mainServiceName); // in case a future agent no longer prefixes keys
     if (cert.root.pfx) { ddb.Put('SelfNodeCert', cert.root.pfx); }
     if (cert.tls) { ddb.Put('SelfNodeTlsCert', cert.tls.pfx); }
     if (proxyConfig) {
@@ -730,11 +784,14 @@ function diagnosticAgent_installCheck(install) {
 
     require('MeshAgent').SendCommand({ action: 'diagnostic', value: { command: 'register', value: nodeid } });
     require('MeshAgent').SendCommand({ action: 'msg', type: 'console', value: "Diagnostic Agent Registered [" + nodeid.length + "/" + nodeid + "]" });
+    require('MeshAgent').SendCommand({ action: 'msg', type: 'console', value: "Diagnostic Agent will monitor service: " + mainServiceName });
 
-    delete ddb;
+    ddb = undefined;
 
-    // Set a recurrent task, to run the Diagnostic Agent every 2 days
-    require('task-scheduler').create({ name: 'meshagentDiagnostic/periodicStart', daily: 2, time: require('tls').generateRandomInteger('0', '23') + ':' + require('tls').generateRandomInteger('0', '59').padStart(2, '0'), service: 'meshagentDiagnostic' });
+    // Set a recurrent task, to run the Diagnostic Agent every 2 days. The hour must be zero padded, schtasks requires HH:mm.
+    require('task-scheduler').create({ name: 'meshagentDiagnostic/periodicStart', daily: 2, time: require('tls').generateRandomInteger('0', '23').padStart(2, '0') + ':' + require('tls').generateRandomInteger('0', '59').padStart(2, '0'), service: 'meshagentDiagnostic' }).then(
+        function () { },
+        function (code) { require('MeshAgent').SendCommand({ action: 'msg', type: 'console', value: "Diagnostic Agent: unable to create scheduled task (" + code + ")" }); });
     //require('task-scheduler').create({ name: 'meshagentDiagnostic/periodicStart', daily: '1', time: '17:16', service: 'meshagentDiagnostic' });
 
     return (svc);
@@ -1335,6 +1392,7 @@ function handleServerCommand(data) {
                                 tunnel.consent = data.consent;
                                 if (global._MSH && _MSH().LocalConsent != null) { tunnel.consent |= parseInt(_MSH().LocalConsent); }
                                 tunnel.privacybartext = data.privacybartext ? data.privacybartext : currentTranslation['privacyBar'];
+                                tunnel.privacybarmaxwidth = ((typeof data.privacybarmaxwidth == 'number') && (data.privacybarmaxwidth > 0)) ? data.privacybarmaxwidth : 0;
                                 tunnel.username = data.username + (data.guestname ? (' - ' + data.guestname) : '');
                                 tunnel.realname = (data.realname ? data.realname : data.username) + (data.guestname ? (' - ' + data.guestname) : '');
                                 tunnel.guestuserid = data.guestuserid;
@@ -1516,7 +1574,7 @@ function handleServerCommand(data) {
                                     pws.on('exit', function () { 
                                         if (replydata != "") reply.installedBy = replydata;
                                         mesh.SendCommand({ action: 'msg', type: 'service', value: JSON.stringify(reply), sessionid: data.sessionid });
-                                        delete pws;
+                                        pws = undefined;
                                     });
                                 } else {
                                     mesh.SendCommand({ action: 'msg', type: 'service', value: JSON.stringify(reply), sessionid: data.sessionid });
@@ -2172,6 +2230,7 @@ function downloadFile(downloadoptions) {
     trustedDownloads[downloadoptions.name].dl = require('https').get(options);
     trustedDownloads[downloadoptions.name].dl.on('error', function (e) { downloadoptions.func(downloadoptions, false); delete trustedDownloads[downloadoptions.name]; });
     trustedDownloads[downloadoptions.name].dl.on('response', function (img) {
+        if (img.statusCode != 200) { downloadoptions.func(downloadoptions, false); delete trustedDownloads[downloadoptions.name]; return; } // Leave the body unread, abort() would pool a dead socket
         this._file = require('fs').createWriteStream(trustedDownloads[downloadoptions.name].filename, { flags: 'wb' });
         this._filehash = require('SHA384Stream').create();
         this._filehash.on('hash', function (h) { if ((downloadoptions.hash != null) && (downloadoptions.hash.toLowerCase() != h.toString('hex').toLowerCase())) { downloadoptions.func(downloadoptions, false); delete trustedDownloads[downloadoptions.name]; return; } downloadoptions.func(downloadoptions, true); });
@@ -2219,10 +2278,30 @@ function serverFetchFile() {
     }
     agentFileHttpOptions.checkServerIdentity.servertlshash = data.servertlshash;
 
+    if (agentFileHttpAgent == null) {
+        // Older agents hand a kept-alive socket back twice when a reply arrives in one read, which writes two queued
+        // requests to that socket at once and the server rejects both. Only take the first hand back per event loop turn.
+        agentFileHttpAgent = http.Agent();
+        var keepSocketAlive = agentFileHttpAgent.keepSocketAlive;
+        agentFileHttpAgent.keepSocketAlive = function (socket) {
+            if (socket.xkeptAlive === true) return 0;
+            socket.xkeptAlive = true;
+            setImmediate(function () { delete socket.xkeptAlive; });
+            return keepSocketAlive.call(this, socket);
+        }
+    }
+    agentFileHttpOptions.agent = agentFileHttpAgent;
+
     if (agentFileHttpOptions == null) return;
     var agentFileHttpRequest = http.request(agentFileHttpOptions,
         function (response) {
             response.xparent = this;
+            if (response.statusCode != 200) {
+                // The agent discards the unread body, abort() here would pool a dead socket and hang the next download
+                sendConsoleText('Batch upload failed, because the server replied with HTTP ' + response.statusCode + ', file: ' + this.xpath);
+                response.end = function () { delete agentFileHttpRequests[this.xparent.xurlpath]; delete this.xparent; serverFetchFile(); }
+                return;
+            }
             try {
                 response.xfile = fs.createWriteStream(this.xpath, { flags: 'wbN' })
                 response.pipe(response.xfile);
@@ -2450,7 +2529,7 @@ function onTunnelUpgrade(response, s, head)
         // This is a UDP relay connection, get the UDP socket setup. // TODO: ***************
         s.data = onUdpRelayServerTunnelData;
         s.udprelay = require('dgram').createSocket({ type: 'udp4' });
-        s.udprelay.bind({ port: 0 });
+        s.udprelay.bind({ port: 0, address: '0.0.0.0' }); // Bind all interfaces, the agent's dgram defaults to 127.0.0.1 which can't reach udpaddr on the LAN
         s.udprelay.peerindex = this.index;
         s.udprelay.on('message', onUdpRelayTargetTunnelConnect);
         s.udprelay.udpport = this.udpport;
@@ -3047,6 +3126,7 @@ function tunnel_kvm_end()
                 this.httprequest.desktop.kvm.users.splice(i, 1);
                 this.httprequest.desktop.kvm.connectionBar.removeAllListeners('close');
                 this.httprequest.desktop.kvm.connectionBar.close();
+                if (require('notifybar-desktop').MaxWidth != null) { require('notifybar-desktop').MaxWidth = this.httprequest.privacybarmaxwidth; }
                 this.httprequest.desktop.kvm.connectionBar = require('notifybar-desktop')(this.httprequest.privacybartext.replace(/\{0\}/g, this.httprequest.desktop.kvm.rusers.join(', ')).replace(/\{1\}/g, this.httprequest.desktop.kvm.users.join(', ')).replace(/'/g, "\\'\\"), require('MeshAgent')._tsid, color_options);
                 this.httprequest.desktop.kvm.connectionBar.httprequest = this.httprequest;
                 this.httprequest.desktop.kvm.connectionBar.on('close', function ()
@@ -3100,6 +3180,7 @@ function kvm_consent_ok(ws) {
             ws.httprequest.desktop.kvm.connectionBar.close();
         }
         try {
+            if (require('notifybar-desktop').MaxWidth != null) { require('notifybar-desktop').MaxWidth = ws.httprequest.privacybarmaxwidth; }
             ws.httprequest.desktop.kvm.connectionBar = require('notifybar-desktop')(ws.httprequest.privacybartext.replace(/\{0\}/g, ws.httprequest.desktop.kvm.rusers.join(', ')).replace(/\{1\}/g, ws.httprequest.desktop.kvm.users.join(', ')).replace(/'/g, "\\'\\"), require('MeshAgent')._tsid, color_options);
             MeshServerLogEx(31, null, "Remote Desktop Connection Bar Activated/Updated (" + ws.httprequest.remoteaddr + ")", ws.httprequest);
         } catch (ex) {
@@ -3206,7 +3287,7 @@ function kvm_consentpromise_resolved(always)
             if (this.ws.httprequest.soptions.notifyTitle != null) { notifyTitle = this.ws.httprequest.soptions.notifyTitle; }
             if (this.ws.httprequest.soptions.notifyMsgDesktop != null) { notifyMessage = this.ws.httprequest.soptions.notifyMsgDesktop.replace(/\{0\}/g, this.ws.httprequest.realname).replace(/\{1\}/g, this.ws.httprequest.username); }
         }
-        try { require('toaster').Toast(notifyTitle, notifyMessage, tsid); } catch (ex) { }
+        try { require('toaster').Toast(notifyTitle, notifyMessage, this.ws.tsid); } catch (ex) { }
     }
     if (this.ws.httprequest.consent && (this.ws.httprequest.consent & 0x40))
     {
@@ -3218,6 +3299,7 @@ function kvm_consentpromise_resolved(always)
         }
         try
         {
+            if (require('notifybar-desktop').MaxWidth != null) { require('notifybar-desktop').MaxWidth = this.ws.httprequest.privacybarmaxwidth; }
             this.ws.httprequest.desktop.kvm.connectionBar = require('notifybar-desktop')(this.ws.httprequest.privacybartext.replace(/\{0\}/g, this.ws.httprequest.desktop.kvm.rusers.join(', ')).replace(/\{1\}/g, this.ws.httprequest.desktop.kvm.users.join(', ')).replace(/'/g, "\\'\\"), require('MeshAgent')._tsid, color_options);
             MeshServerLogEx(31, null, "Remote Desktop Connection Bar Activated/Updated (" + this.ws.httprequest.remoteaddr + ")", this.ws.httprequest);
         } catch (ex)
@@ -3492,6 +3574,16 @@ function onTunnelData(data)
                 //
                 // Basic file transfer
                 //
+
+                // Check user access rights for files
+                if (((this.httprequest.rights & MESHRIGHT_REMOTECONTROL) == 0) || ((this.httprequest.rights != 0xFFFFFFFF) && ((this.httprequest.rights & MESHRIGHT_NOFILES) != 0))) {
+                    // Disengage this tunnel, user does not have the rights to do this!!
+                    this.httprequest.protocol = 999999;
+                    this.httprequest.s.end();
+                    sendConsoleText("Error: No files control rights.");
+                    return;
+                }
+
                 var stats = null;
                 if ((process.platform != 'win32') && (this.httprequest.xoptions.file.startsWith('/') == false)) { this.httprequest.xoptions.file = '/' + this.httprequest.xoptions.file; }
                 try { stats = require('fs').statSync(this.httprequest.xoptions.file) } catch (ex) { }
@@ -3627,12 +3719,11 @@ function onTunnelData(data)
                         var options = {};
                         try { options.uid = require('user-sessions').consoleUid(); } catch (ex) { }
                         options.type = require('child_process').SpawnTypes.TERM;
-                        var replydata = "";
                         var cmdchild = require('child_process').execFile('/usr/bin/caffeinate', ['caffeinate', '-u', '-t', '10'], options);
                         cmdchild.descriptorMetadata = 'UserCommandsShell';
-                        cmdchild.stdout.on('data', function (c) { replydata += c.toString(); });
-                        cmdchild.stderr.on('data', function (c) { replydata + c.toString(); });
-                        cmdchild.on('exit', function () { delete cmdchild; });
+                        cmdchild.stdout.on('data', function (c) { });
+                        cmdchild.stderr.on('data', function (c) { });
+                        cmdchild.on('exit', function () { cmdchild = undefined; });
                     } catch(err) { }
                 }
                 // Remote desktop using native pipes
@@ -5274,30 +5365,28 @@ function processConsoleCommand(cmd, args, rights, sessionid) {
                 }
                 break;
             case 'service':
-                if (args['_'].length != 1) {
-                    response = "Proper usage: service status|restart"; // Display usage
-                } else {
+                var op = String(args['_'][0]).toLowerCase();
+                if ((op != 'status') && (op != 'restart')) { response = "Proper usage: service status|restart"; }
+                else {
                     var svcname = process.platform == 'win32' ? 'Mesh Agent' : 'meshagent';
+                    try { if (global._MSH && _MSH().meshServiceName) { svcname = _MSH().meshServiceName; } } catch (ex) { }
                     try {
-                        svcname = require('MeshAgent').serviceName;
+                        var n = require('MeshAgent').serviceName;
+                        if ((typeof n == 'string') && (n != '')) { svcname = n; }
                     } catch (ex) { }
-                    var s = require('service-manager').manager.getService(svcname);
-                    switch (args['_'][0].toLowerCase()) {
-                        case 'status':
-                            response = 'Service ' + (s.isRunning() ? (s.isMe() ? '[SELF]' : '[RUNNING]') : ('[NOT RUNNING]'));
-                            break;
-                        case 'restart':
-                            if (s.isMe()) {
-                                s.restart();
-                            } else {
-                                response = 'Restarting another agent instance is not allowed';
-                            }
-                            break;
-                        default:
-                            response = "Proper usage: service status|restart"; // Display usage
-                            break;
-                    }
-                    if (process.platform == 'win32') { s.close(); }
+                    var s = null;
+                    try { s = require('service-manager').manager.getService(svcname); } catch (ex) { }
+                    if (s == null) { response = "Service '" + svcname + "' [NOT INSTALLED]"; }
+                    else if (!s.isRunning()) { response = "Service '" + svcname + "' [STOPPED]"; }
+                    else if (op == 'status') { response = "Service '" + svcname + "' [" + (s.isMe() ? 'RUNNING, this agent' : 'RUNNING, another agent instance') + ']'; }
+                    else if (s.isMe()) {
+                        try {
+                            sendConsoleText("Service '" + svcname + "' restarting", sessionid);
+                            response = null;
+                            s.restart();
+                        } catch (rex) { if (String(rex).indexOf('thread is exiting') < 0) { response = 'Restart failed: ' + rex; } }
+                    } else { response = 'Restarting another agent instance is not allowed'; }
+                    if ((process.platform == 'win32') && (s != null)) { s.close(); }
                 }
                 break;
             case 'zip':
@@ -6257,8 +6346,8 @@ function processConsoleCommand(cmd, args, rights, sessionid) {
             }
             case 'diagnostic':
                 {
-                    if (!mesh.DAIPC.listening) {
-                        response = 'Unable to bind to Diagnostic IPC, most likely because the path (' + process.cwd() + ') is not on a local file system';
+                    if (mesh.DAIPC._listenOk !== true) {
+                        response = 'Unable to bind to Diagnostic IPC (' + mesh.DAIPC.IPCPATH + ')' + (mesh.DAIPC._listenError ? (': ' + mesh.DAIPC._listenError) : '') + ((process.platform == 'win32') ? '' : ', most likely because the path (' + process.cwd() + ') is not on a local file system');
                         break;
                     }
                     var diag = diagnosticAgent_installCheck();
@@ -6267,8 +6356,16 @@ function processConsoleCommand(cmd, args, rights, sessionid) {
                             diagnosticAgent_uninstall();
                             response = 'Diagnostic Agent uninstalled';
                         }
+                        else if (args['_'].length == 1 && args['_'][0] == 'start') {
+                            // Run the Diagnostic Agent now, instead of waiting for the scheduled task. It stops by itself when done.
+                            if (diag.isRunning()) {
+                                response = 'Diagnostic Agent is already running';
+                            } else {
+                                try { diag.start(); response = 'Diagnostic Agent started, results will show in the device events'; } catch (ex) { response = 'Unable to start Diagnostic Agent: ' + ex; }
+                            }
+                        }
                         else {
-                            response = 'Diagnostic Agent installed at: ' + diag.appLocation();
+                            response = 'Diagnostic Agent installed at: ' + diag.appLocation() + (diag.isRunning() ? ' [RUNNING]' : ' [STOPPED]') + '. Usage: diagnostic start|uninstall';
                         }
                     }
                     else {
@@ -7114,6 +7211,26 @@ function agentUpdate_Start(updateurl, updateoptions) {
                 agentUpdate_Start._selfupdate = null;
             });
             agentUpdate_Start._selfupdate.on('response', function (img) {
+                if (img.statusCode != 200) {
+                    // Saving an error page fails the hash check, or replaces the agent when there is no hash to check
+                    // The agent discards the unread body, abort() here would pool a dead socket and hang the next download
+                    agentUpdate_Start._selfupdate = null;
+                    sendConsoleText('Self Update failed, because the server replied with HTTP ' + img.statusCode + ', URL: ' + (updateurl != null ? updateurl : options.path), sessionid);
+                    sendAgentMessage('Self Update failed, because the server replied with HTTP ' + img.statusCode + ', URL: ' + (updateurl != null ? updateurl : options.path), 3);
+
+                    // Only a server error or rate limiting can clear up by itself
+                    if ((img.statusCode < 500) && (img.statusCode != 429)) { return; }
+                    if (++agentUpdate_Start._retryCount < 4) {
+                        sendConsoleText('Self Update will try again in 60 seconds...', sessionid);
+                        agentUpdate_Start._timeout = setTimeout(agentUpdate_Start, 60000, updateurl, updateoptions);
+                    }
+                    else {
+                        agentUpdate_Start._retryCount = 0;
+                        sendConsoleText('Self Update giving up, too many failures...', sessionid);
+                        sendAgentMessage('Self Update giving up, too many failures...', 3);
+                    }
+                    return;
+                }
                 this._file = require('fs').createWriteStream(agentfilename + (process.platform == 'win32' ? '.update.exe' : '.update'), { flags: 'wb' });
                 this._filehash = require('SHA384Stream').create();
                 this._filehash.on('hash', function (h) {
@@ -7133,6 +7250,7 @@ function agentUpdate_Start(updateurl, updateoptions) {
                                 agentUpdate_Start._timeout = setTimeout(agentUpdate_Start, 60000, updateurl, updateoptions);
                             }
                             else {
+                                agentUpdate_Start._retryCount = 0;
                                 sendConsoleText('Self Update giving up, too many failures...', sessionid);
                                 sendAgentMessage('Self Update giving up, too many failures...', 3);
                             }
@@ -7482,7 +7600,7 @@ function sendNetworkUpdate(force) {
 			try {
                 var probableMainLanIp = getProbableMainLanIp();
                 if (probableMainLanIp != null) {
-                    netInfo.probable_main_lan_ip = probableMainLanIp;
+                    netInfo.probableMainLanIp = probableMainLanIp;
                 }
             } catch (ex) { }
         } else if (process.platform == 'linux') {

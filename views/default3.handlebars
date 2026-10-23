@@ -562,7 +562,7 @@
                         <input type=button class="btn btn-secondary me-1 btn-sm" id=SelectAllButton onclick="selectallButtonFunction();" value="Select All" />
                         <input type=button class="btn btn-primary me-1 btn-sm" id=GroupActionButton disabled="disabled" value="Group Action" onclick=groupActionFunction() />
                         <input type=button class="btn btn-secondary me-1 btn-sm" id=ScrollToTopButton onclick="onDevicesScroll(true);" value="Scroll To Top" />
-                        <input type="text" id=SearchInput class="form-control-sm me-1 btn-sm" placeholder="Filter" onchange=onDeviceSearchChanged(event) onclick=onDeviceSearchChanged(event) onkeyup=onDeviceSearchChanged(event) onfocus=onSearchFocus(1) onblur=onSearchFocus(0) title="Filter devices by name or prefix: user: (u:) ip: group: (g:) tag: (t:) atag: (a:) os: amt: desc: wsc:ok/noav/noupdate/nofirewall/any connectivity: (c:) - Prefix with ! to negate, e.g. !tag:abc">
+                        <input type="text" id=SearchInput class="form-control-sm me-1 btn-sm" placeholder="Filter" onchange=onDeviceSearchChanged(event) onclick=onDeviceSearchChanged(event) onkeyup=onDeviceSearchChanged(event) onfocus=onSearchFocus(1) onblur=onSearchFocus(0) title="Filter devices by name or prefix: user: (u:) ip: group: (g:) tag: (t:) atag: (a:) os: amt: desc: wsc:ok/noav/noupdate/nofirewall/any connectivity: (c:) - Prefix with ! to negate, e.g. !tag:abc - Separate terms with `,`, `or`, or `and`: `device1,device2` or `device1 or device2` = OR; `device1 and device2` = AND; prefix with `!` to exclude, e.g. `u:user1 and !g:group1`.">
                         <span id=SearchInputClearButton style="display:none;position:relative">
                             <span class="fa-layers fa-fw" role="button" onclick="clearDeviceSearch()" style="position:absolute;left:-25px;top:-15px">
                                 <i class="fa-solid fa-circle" style="color:var(--bs-secondary-bg)"></i>
@@ -603,7 +603,7 @@
                         </span>
                         <input type="button" class="btn btn-secondary me-1 btn-sm" onclick="onDevicesScroll(true);" value="Scroll To Top" />
                         <input type="button" class="btn btn-primary me-1 btn-sm" onclick="showMultiDesktopSettings()" value="Settings" />
-                        <input type="text" id=KvmSearchInput class="form-control-sm me-1" placeholder="Filter" onchange=onDeviceSearchChanged(event) onclick=onDeviceSearchChanged(event) onkeyup=onDeviceSearchChanged(event) onfocus=onSearchFocus(1) onblur=onSearchFocus(0) title="Filter devices by name or prefix: user: (u:) ip: group: (g:) tag: (t:) atag: (a:) os: amt: desc: wsc:ok/noav/noupdate/nofirewall/any connectivity: (c:) - Prefix with ! to negate, e.g. !tag:abc">
+                        <input type="text" id=KvmSearchInput class="form-control-sm me-1" placeholder="Filter" onchange=onDeviceSearchChanged(event) onclick=onDeviceSearchChanged(event) onkeyup=onDeviceSearchChanged(event) onfocus=onSearchFocus(1) onblur=onSearchFocus(0) title="Filter devices by name or prefix: user: (u:) ip: group: (g:) tag: (t:) atag: (a:) os: amt: desc: wsc:ok/noav/noupdate/nofirewall/any connectivity: (c:) - Prefix with ! to negate, e.g. !tag:abc - Separate terms with `,`, `or`, or `and`: `device1,device2` or `device1 or device2` = OR; `device1 and device2` = AND; prefix with `!` to exclude, e.g. `u:user1 and !g:group1`.">
                         <span id=KvmSearchInputClearButton style="display:none;position:relative">
                             <span class="fa-layers fa-fw" role="button" onclick="clearDeviceSearch()" style="position:absolute;left:-25px;top:-15px">
                                 <i class="fa-solid fa-circle" style="color:var(--bs-secondary-bg)"></i>
@@ -2156,6 +2156,7 @@
                                 </div>
                                 <div class="form-floating mb-2">
                                     <select id="d7framelimiter" class="form-select">
+                                        <option value=20>Very fast</option>
                                         <option selected=selected value=50>Fast</option>
                                         <option value=100>Medium</option>
                                         <option value=400>Slow</option>
@@ -2331,7 +2332,7 @@
 
 
         <audio id="chimes"><source src="sounds/chimes.mp3" type="audio/mp3" /></audio>
-        <iframe style=display:none name="fileDownloadFrame"></iframe>
+        <iframe id=fileDownloadFrame style=display:none name="fileDownloadFrame"></iframe>
     </div>
     <script type="text/javascript">
         'use strict';
@@ -3235,7 +3236,8 @@
                 // Fetch list of meshes, nodes, files
                 meshserver.send({ action: 'usergroups' });
                 meshserver.send({ action: 'meshes' });
-                meshserver.send({ action: 'nodes', id: '{{currentNode}}', skip: (devicePagingState == null) ? 0 : devicePagingState.skip });
+                deviceServerFilter = getDeviceServerFilter();
+                meshserver.send({ action: 'nodes', id: '{{currentNode}}', skip: (devicePagingState == null) ? 0 : devicePagingState.skip, filter: deviceServerFilter });
                 meshserver.send({ action: 'loginTokens' });
                 if (pluginHandler != null) { meshserver.send({ action: 'plugins' }); }
                 if ('{{currentNode}}'.toLowerCase() == '') { meshserver.send({ action: 'files' }); }
@@ -3904,13 +3906,14 @@
                             var splitip = currentNode.lastaddr.split(':');
                             if (splitip.length > 2) {
                                 // IPv6
-                                x += addHtmlValue2("Last agent address", currentNode.lastaddr + ' <i class="fa-fw fa-regular fa-clipboard fa-sm" role=button title="' + "Copy address to clipboard" + '" onclick=copyTextToClip2("' + encodeURIComponentEx(currentNode.lastaddr) + '")></i>');
+                                var v6addr = splitip.slice(0, -1).join(':');
+                                x += addHtmlValue2("Last agent address", (isPrivateIP(v6addr) ? currentNode.lastaddr : '<a href="https://iplocation.com/?ip=' + encodeURIComponent(v6addr) + '" rel="noreferrer noopener" target="MeshIPLookup">' + currentNode.lastaddr + '</a>') + ' <i class="fa-fw fa-regular fa-clipboard fa-sm" role=button title="' + "Copy address to clipboard" + '" onclick=copyTextToClip2("' + encodeURIComponentEx(currentNode.lastaddr) + '")></i>');
                             } else {
                                 // IPv4
                                 if (isPrivateIP(currentNode.lastaddr)) {
                                     x += addHtmlValue2("Last agent address", splitip[0] + ' <i class="fa-fw fa-regular fa-clipboard fa-sm" role=button title="' + "Copy address to clipboard" + '" onclick=copyTextToClip2("' + encodeURIComponentEx(splitip[0]) + '")></i>');
                                 } else {
-                                    x += addHtmlValue2("Last agent address", '<a href="https://iplocation.com/?ip=' + splitip[0] + '" rel="noreferrer noopener" target="MeshIPLoopup">' + splitip[0] + '</a> <i class="fa-fw fa-regular fa-clipboard fa-sm" role=button title="' + "Copy address to clipboard" + '" onclick=copyTextToClip2("' + encodeURIComponentEx(splitip[0]) + '")></i>');
+                                    x += addHtmlValue2("Last agent address", '<a href="https://iplocation.com/?ip=' + splitip[0] + '" rel="noreferrer noopener" target="MeshIPLookup">' + splitip[0] + '</a> <i class="fa-fw fa-regular fa-clipboard fa-sm" role=button title="' + "Copy address to clipboard" + '" onclick=copyTextToClip2("' + encodeURIComponentEx(splitip[0]) + '")></i>');
                                 }
                             }
                         }
@@ -3967,6 +3970,10 @@
                     } else {
                         server_showRestoreDlgUpdate(message.data);
                     }
+                    break;
+                }
+                case 'serverbackupready': {
+                    server_backupReady(message);
                     break;
                 }
                 case 'serverversion': {
@@ -6091,7 +6098,20 @@
                 }
                 if (deviceViewSettings.devsCols.indexOf('links') >= 0) { r += '<td style=text-align:center;font-size:x-small>' + getShortRouterLinks(node); } // Links
                 if (deviceViewSettings.devsCols.indexOf('user') >= 0) { r += '<td style=text-align:center>' + getUserShortStr(node); } // User
-                if (deviceViewSettings.devsCols.indexOf('ip') >= 0) { var ip = ''; if (node.mtype == 3) { ip = node.host; } else if (node.ip) { ip = node.ip; } r += '<td style=text-align:center;white-space:nowrap;overflow:hidden;text-overflow:ellipsis title="' + EscapeHtml(ip) + '">' + EscapeHtml(ip); } // IP address
+                if (deviceViewSettings.devsCols.indexOf('ip') >= 0) {
+                    var ip = '';
+                    if ((node.mtype == 1) || (node.mtype == 3)) { ip = node.host || ''; } else if (node.ip) { ip = node.ip; }
+                    var ipHtml = EscapeHtml(ip);
+                    var linkip = null;
+                    if (typeof ip == 'string') { if (/^(\d{1,3}\.){3}\d{1,3}(:\d+)?$/.test(ip)) { linkip = ip.split(':')[0]; } else if (/^[0-9a-f]*:[0-9a-f:]+$/i.test(ip) && (ip.indexOf(':') != ip.lastIndexOf(':'))) { linkip = ip; } }
+                    if ((linkip != null) && !isPrivateIP(linkip)) { ipHtml = '<a href="https://iplocation.com/?ip=' + encodeURIComponent(linkip) + '" rel="noreferrer noopener" target="MeshIPLookup">' + EscapeHtml(ip) + '</a>'; }
+                    var lanip = (typeof node.probableMainLanIP == 'string') ? node.probableMainLanIP : '';
+                    if ((lanip != '') && (lanip != ip)) {
+                        r += '<td style=text-align:center;white-space:nowrap;overflow:hidden;text-overflow:ellipsis title="' + EscapeHtml(lanip + ' / ' + ip) + '">' + "LAN" + ' ' + EscapeHtml(lanip) + '<br />' + "WAN" + ' ' + ipHtml;
+                    } else {
+                        r += '<td style=text-align:center;white-space:nowrap;overflow:hidden;text-overflow:ellipsis title="' + EscapeHtml(ip) + '">' + ipHtml;
+                    }
+                } // IP address
                 if (deviceViewSettings.devsCols.indexOf('conn') >= 0) { r += '<td style=text-align:center>' + states.join('&nbsp;+&nbsp;'); } // Connectivity
                 if (deviceViewSettings.devsCols.indexOf('amthost') >= 0) { r += '<td style=text-align:center>' + (((node.intelamt == null) || (node.intelamt.host == null)) ? '' : EscapeHtml(node.intelamt.host)); }
                 if (deviceViewSettings.devsCols.indexOf('amtstate') >= 0) {
@@ -6475,7 +6495,7 @@
                 } else if (contype == 1) {
                     // Setup the Mesh Agent remote desktop
                     desk = CreateAgentRedirect(meshserver, CreateAgentRemoteDesktop('kvmid_' + shortid), serverPublicNamePort, authCookie, authRelayCookie, domainUrl);
-                    desk.m.UseExtendedKeyFlag = (node.agent.id < 5); // Only use extended keys on Windows agents for now
+                    desk.m.UseExtendedKeyFlag = isWindowsNode(node);
                     desk.m.mouseCursorActive(xxcurrentView == 11);
                     desk.shortid = shortid;
                     desk.attemptWebRTC = attemptWebRTC;
@@ -7681,10 +7701,20 @@
             }
             return r;
         }
-
-        function parseSearchOrInput(x) {
-            var s = x.split(' ' + "or" + ' '), r = null;
-            for (var i in s) { var r2 = parseSearchAndInput(s[i]); if (r == null) { r = r2; } else { for (var j in r2) { if (r.indexOf(r2[j] >= 0)) { r.push(r2[j]); } } } }
+		
+		function parseSearchOrInput(x) {
+            if (x == '') { return parseSearchAndInput(x); } // Empty search, return all devices.
+            var parts = x.split(','), r = null; // Comma = OR, each part keeps its own prefix (u:, g:, t:, etc.)
+            for (var p in parts) {
+                var s = parts[p].split(' ' + "or" + ' ');
+                for (var i in s) {
+                    var trimmed = s[i].trim();
+                    if (trimmed == '') { continue; } // Skip empty pieces from stray/extra commas
+                    var r2 = parseSearchAndInput(trimmed);
+                    if (r == null) { r = r2; } else { for (var j in r2) { if (r.indexOf(r2[j]) < 0) { r.push(r2[j]); } } }
+                }
+            }
+            if (r == null) { r = []; }
             return r;
         }
 
@@ -7823,8 +7853,30 @@
             return r;
         }
 
+        // When the server pages the device list (maxDeviceView), plain name filters are sent to the server so they
+        // search all devices and not only the current page. Prefixed (u:, ip:, tag:...) and composite filters stay local.
+        var deviceServerFilter = '', deviceServerFilterTimer = null;
+        function getDeviceServerFilter() {
+            var x = Q('SearchInput').value.toLowerCase().trim();
+            if ((x == '') || (/[:,!]/.test(x)) || (/\s(or|and)\s/.test(x))) return '';
+            return x;
+        }
+        function updateDeviceServerFilter() {
+            if ((serverinfo == null) || (serverinfo.maxdeviceview == null) || (meshserver == null)) return;
+            if (deviceServerFilterTimer != null) { clearTimeout(deviceServerFilterTimer); deviceServerFilterTimer = null; }
+            if (getDeviceServerFilter() == deviceServerFilter) return;
+            deviceServerFilterTimer = setTimeout(function () {
+                deviceServerFilterTimer = null;
+                var f = getDeviceServerFilter();
+                if (f == deviceServerFilter) return;
+                deviceServerFilter = f;
+                meshserver.send({ action: 'nodes', skip: 0, filter: f });
+            }, 400);
+        }
+
         function onSearchInputChanged() {
             var x = Q('SearchInput').value.toLowerCase().trim(); putstore('_search', Q('SearchInput').value);
+            updateDeviceServerFilter();
             x == '' ? QC('SearchInput').remove('search') : QC('SearchInput').add('search');
             //QS('SearchInput')['background-color'] = QS('KvmSearchInput')['background-color'] = (x == '') ? null : '#FDFFBE';
             QV('SearchInputClearButton', (x != ''));
@@ -11021,6 +11073,7 @@
                                     desktop.m.hold(true);
                                     webRtcDesktop.webRtcActive = true;
                                     webRtcDesktop.softdesktop = CreateKvmDataChannel(webRtcDesktop.webchannel, CreateAgentRemoteDesktop('Desk', Q('id_mainarea')), desktop.m);
+                                    webRtcDesktop.softdesktop.m.UseExtendedKeyFlag = isWindowsNode(desktopNode);
                                     webRtcDesktop.softdesktop.m.setRotation(desktop.m.rotation);
                                     webRtcDesktop.softdesktop.m.onScreenSizeChange = deskAdjust;
                                     webRtcDesktop.softdesktop.m.ImageType = webpSupport ? 4 : 1; // Send 4 if WebP is supported, otherwise send 1 for JPEG.
@@ -11076,7 +11129,7 @@
                 } else if ((contype == null) || (contype == 1) || ((contype == 3) && ((currentNode.agent.id > 4) && ((debugmode == null))))) {
                     // Setup the Mesh Agent remote desktop
                     desktop = CreateAgentRedirect(meshserver, CreateAgentRemoteDesktop('Desk'), serverPublicNamePort, authCookie, authRelayCookie, domainUrl);
-                    desktop.m.UseExtendedKeyFlag = (desktopNode.agent.id < 5); // Only use extended keys on Windows agents for now
+                    desktop.m.UseExtendedKeyFlag = isWindowsNode(desktopNode);
                     desktop.m.mouseCursorActive(xxcurrentView == 11);
                     desktop.debugmode = debugmode;
                     desktop.m.debugmode = debugmode;
@@ -15408,13 +15461,14 @@
                     var splitip = node.lastaddr.split(':');
                     if (splitip.length > 2) {
                         // IPv6
-                        x += addDetailItem("Last agent address", '<a href="https://iplocation.com/?ip=' + splitip.slice(0, -1).join(':') + '" rel="noreferrer noopener" target="MeshIPLoopup">' + splitip.slice(0, -1).join(':') + '</a>');
+                        var v6addr = splitip.slice(0, -1).join(':');
+                        x += addDetailItem("Last agent address", isPrivateIP(v6addr) ? EscapeHtml(v6addr) : ('<a href="https://iplocation.com/?ip=' + encodeURIComponent(v6addr) + '" rel="noreferrer noopener" target="MeshIPLookup">' + EscapeHtml(v6addr) + '</a>'));
                     } else {
                         // IPv4
                         if (isPrivateIP(node.lastaddr)) {
                             x += addDetailItem("Last agent address", splitip[0]);
                         } else {
-                            x += addDetailItem("Last agent address", '<a href="https://iplocation.com/?ip=' + splitip[0] + '" rel="noreferrer noopener" target="MeshIPLoopup">' + splitip[0] + '</a>');
+                            x += addDetailItem("Last agent address", '<a href="https://iplocation.com/?ip=' + splitip[0] + '" rel="noreferrer noopener" target="MeshIPLookup">' + splitip[0] + '</a>');
                         }
                     }
                 }
@@ -17272,9 +17326,29 @@
             return false;
         }
         function backup_enterPassword() {
-            xxModal.hide();
-            meshserver.send({ action: 'serverbackuppassword', check: false, password: Q('dbackup_password').value, override: Q('doverrulepw').checked });
-            window.location.href = '{{{domainurl}}}backup.zip' + ((urlargs.key)?('?key=' + urlargs.key):'');
+            meshserver.send({ action: 'serverbackuppassword', check: false, prepare: true, password: Q('dbackup_password').value, override: Q('doverrulepw').checked });
+            // Keep the dialog open as a status box, with only the Cancel button to close it
+            setModalContent('xxAddAgent', "Download server backup", "Preparing server backup, this can take a few minutes. The download will start when it is ready.");
+            QV('idx_dlgOkButton', false);
+            return false;
+        }
+        function server_backupReady(message) {
+            hideModal();
+            if (!message.ok) { backup_showMessage(EscapeHtml(message.msg ? message.msg : "Backup error.")); return; }
+            // Navigating the page makes Firefox drop the control web socket and the reconnect reload cancels the download, and
+            // downloadFile() removes its frame after 10s, before a big backup is ready. Downloads never fire onload, errors do.
+            var f = Q('fileDownloadFrame');
+            f.onload = function () {
+                f.onload = null;
+                var x = ''; try { x = EscapeHtml(f.contentDocument.body.innerText); } catch (ex) { }
+                backup_showMessage(x);
+            };
+            f.src = '{{{domainurl}}}backup.zip' + ((urlargs.key)?('?key=' + urlargs.key):'');
+        }
+        function backup_showMessage(x) {
+            var show = function () { setModalContent('xxAddAgent', "Download server backup", x); showModal('xxAddAgentModal', 'idx_dlgOkButton'); };
+            // The status dialog may still be fading out, and Bootstrap ignores show() mid-transition
+            if (xxModal) { Q('xxAddAgentModal').addEventListener('hidden.bs.modal', show, { once: true }); } else { show(); }
         }
 
         function server_showRestoreDlg() {
@@ -24420,7 +24494,7 @@
         function addHtmlValue5(t, v) { return '<div style=padding:4px><div style=display:inline-block;float:right><b>' + v + '</b></div><div style=display:inline-block>' + t + '</div></div>'; }
         function focusTextBox(x) { setTimeout(function () { Q(x).selectionStart = Q(x).selectionEnd = 65535; Q(x).focus(); }, 0); }
         function validateEmail(v) { var emailReg = /^(([^<>()\[\]\\.,;:\s@"]+(\.[^<>()\[\]\\.,;:\s@"]+)*)|(".+"))@((\[[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}])|(([a-zA-Z\-0-9]+\.)+[a-zA-Z]{2,}))$/; return emailReg.test(v); } // New version
-        function isPrivateIP(a) { return (a.startsWith('10.') || a.startsWith('172.16.') || a.startsWith('192.168.')); }
+        function isPrivateIP(a) { if (a.indexOf(':') != a.lastIndexOf(':')) { return /^(::1?$|f[cd]|fe[89ab])/i.test(a); } return /^(10\.|127\.|169\.254\.|192\.168\.|172\.(1[6-9]|2[0-9]|3[01])\.|100\.(6[4-9]|[7-9][0-9]|1[01][0-9]|12[0-7])\.)/.test(a); }
         function u2fSupported() { return (window.u2f && ((navigator.userAgent.indexOf('Chrome/') > 0) || (navigator.userAgent.indexOf('Firefox/') > 0) || (navigator.userAgent.indexOf('Opera/') > 0) || (navigator.userAgent.indexOf('Safari/') > 0))); }
         function findOne(arr1, arr2) { if ((arr1 == null) || (arr2 == null)) return false; return arr2.some(function (v) { return arr1.indexOf(v) >= 0; }); };
         function copyTextToClip(txt) { function selectElementText(e) { if (document.selection) { var range = document.body.createTextRange(); range.moveToElementText(e); range.select(); } else if (window.getSelection) { var range = document.createRange(); range.selectNode(e); window.getSelection().removeAllRanges(); window.getSelection().addRange(range); } } var e = document.createElement('DIV'); e.textContent = txt; document.body.appendChild(e); selectElementText(e); document.execCommand('copy'); e.remove(); }

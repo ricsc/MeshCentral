@@ -144,7 +144,7 @@ var CreateAgentRemoteDesktop = function (canvasid, scrolldiv) {
                 obj.PendingOperations.push([r, 0]);
             }
         }
-        tile.error = function () { console.log('DecodeTileError'); }
+        tile.onerror = function () { console.log('DecodeTileError'); obj.PendingOperations.push([r, 0]); if (obj.State != 0) { while (obj.DoPendingOperations()) { } } }
     }
 
     obj.DoPendingOperations = function () {
@@ -221,12 +221,12 @@ var CreateAgentRemoteDesktop = function (canvasid, scrolldiv) {
         if ((cmd == 3) || (cmd == 4) || (cmd == 7)) { X = (view[4] << 8) + view[5]; Y = (view[6] << 8) + view[7]; }
         if (obj.debugmode > 2) { console.log('CMD', cmd, cmdsize, X, Y); }
 
-        // Fix for view being too large for String.fromCharCode.apply()
-        var chunkSize = 10000;
-        let result = '';
-        for (let i = 0; i < view.length; i += chunkSize) { result += String.fromCharCode.apply(null, view.slice(i, i + chunkSize)); }
         // Record the command if needed
         if (obj.recordedData != null) {
+            // Fix for view being too large for String.fromCharCode.apply()
+            var chunkSize = 10000;
+            let result = '';
+            for (let i = 0; i < view.length; i += chunkSize) { result += String.fromCharCode.apply(null, view.slice(i, i + chunkSize)); }
             if (cmdsize > 65000) {
                 obj.recordedData.push(recordingEntry(2, 1, obj.shortToStr(27) + obj.shortToStr(8) + obj.intToStr(cmdsize) + obj.shortToStr(cmd) + obj.shortToStr(0) + obj.shortToStr(0) + obj.shortToStr(0) + result));
             } else {
@@ -408,7 +408,7 @@ var CreateAgentRemoteDesktop = function (canvasid, scrolldiv) {
         return convertKeyCodeTable[e.code];
     }
 
-    var extendedKeyTable = ['ShiftRight', 'AltRight', 'ControlRight', 'Home', 'End', 'Insert', 'Delete', 'PageUp', 'PageDown', 'NumpadDivide', 'NumpadEnter', 'NumLock', 'Pause'];
+    var extendedKeyTable = ['AltRight', 'ControlRight', 'Home', 'End', 'Insert', 'Delete', 'PageUp', 'PageDown', 'NumpadDivide', 'NumpadEnter', 'NumLock', 'Pause'];
     obj.SendKeyMsg = function (action, event) {
         if (action == null) return;
         if (!event) { event = window.event; }
@@ -425,7 +425,10 @@ var CreateAgentRemoteDesktop = function (canvasid, scrolldiv) {
             }; 
         }
 
-        if ((extendedKey == false) && event.code && (event.code.startsWith('NumPad') == false) && (obj.localKeyMap == false)) {
+        if ((obj.UseExtendedKeyFlag || (urlargs.extkeys == 1)) && ((event.code == 'ShiftRight') || ((event.keyCode == 16) && (event.location == 2)))) {
+            // Right Shift has its own scan code, not an extended Left Shift scan code.
+            obj.SendKeyMsgKC(action, 161, false);
+        } else if ((extendedKey == false) && event.code && (event.code.startsWith('NumPad') == false) && (obj.localKeyMap == false)) {
             // Convert "event.code" into a scancode. This works the same regardless of the keyboard language.
             // Older browsers will not support this.
             var kc = convertKeyCode(event);

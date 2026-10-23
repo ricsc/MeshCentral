@@ -14,6 +14,26 @@
 /*jshint esversion: 6 */
 "use strict";
 
+// Return true if the source IP is allowed to enroll a new agent. Server and
+// domain lists are both enforced when present, matching the existing allowed
+// IP configuration semantics.
+function isAgentConnectionAllowedByEnrollmentPolicy(settings, domain, ip, nodeExists) {
+    if (nodeExists) return true;
+    const ipcheck = require('ipcheck');
+    const ipLists = [settings.agentallowedipnewagents, domain.agentallowedipnewagents];
+    for (var i = 0; i < ipLists.length; i++) {
+        if (ipLists[i] == null) continue;
+        var match = false;
+        try {
+            for (var j = 0; j < ipLists[i].length; j++) {
+                if (ipcheck.match(ip, ipLists[i][j])) { match = true; break; }
+            }
+        } catch (ex) { }
+        if (match == false) return false;
+    }
+    return true;
+}
+
 // Construct a MeshAgent object, called upon connection
 module.exports.CreateMeshAgent = function (parent, db, ws, req, args, domain) {
     const forge = parent.parent.certificateOperations.forge;
@@ -211,11 +231,14 @@ module.exports.CreateMeshAgent = function (parent, db, ws, req, args, domain) {
                                 parent.parent.debug('agent', "Clearing core for agent " + obj.nodeid);
                             } else {
                                 // Setup task limiter options, this system limits how many tasks can run at the same time to spread the server load.
-                                var taskLimiterOptions = { hash: meshcorehash, core: parent.parent.defaultMeshCores[corename], name: corename };
+                                var taskLimiterOptions = { hash: meshcorehash, core: parent.parent.defaultMeshCores[corename], name: corename, command: 10, size: parent.parent.defaultMeshCores[corename].length };
 
-                                // If the agent supports compression, sent the core compressed.
+                                // If the agent supports compression, send the core compressed through MeshCommand_CompressedCoreModule (20)
+                                // server uses zlib.deflate, agent expects zip.deflateRaw. Fixed by stripping 2 byte header and 4 byte trailer
                                 if ((obj.agentInfo.capabilities & 0x100) && (parent.parent.defaultMeshCoresDeflate[corename])) {
-                                    args.core = parent.parent.defaultMeshCoresDeflate[corename];
+                                    const zcore = parent.parent.defaultMeshCoresDeflate[corename];
+                                    taskLimiterOptions.core = zcore.slice(2, zcore.length - 4);
+                                    taskLimiterOptions.command = 20;
                                 }
 
                                 // Update new core with task limiting so not to flood the server. This is a high priority task.
@@ -224,9 +247,9 @@ module.exports.CreateMeshAgent = function (parent, db, ws, req, args, domain) {
                                     if (obj.authenticated == 2) {
                                         // Send the updated core.
                                         delete obj.agentCoreUpdatePending;
-                                        obj.sendBinary(common.ShortToStr(10) + common.ShortToStr(0) + argument.hash + argument.core.toString('binary'), function () { parent.parent.taskLimiter.completed(taskid); }); // MeshCommand_CoreModule, start core update
+                                        obj.sendBinary(common.ShortToStr(argument.command) + common.ShortToStr(0) + argument.hash + argument.core.toString('binary'), function () { parent.parent.taskLimiter.completed(taskid); });
                                         parent.agentStats.updatingCoreCount++;
-                                        parent.parent.debug('agent', "Updating core " + argument.name + " for agent " + obj.nodeid);
+                                        parent.parent.debug('agent', "Updating core " + argument.name + " for agent " + obj.nodeid + " (sent " + ((argument.command == 20) ? ("compressed, to " + argument.core.length) + " from ": ("uncompressed, ")) + argument.size + " bytes)");
                                     } else {
                                         // This agent is probably disconnected, nothing to do.
                                         parent.parent.taskLimiter.completed(taskid);
@@ -366,7 +389,7 @@ module.exports.CreateMeshAgent = function (parent, db, ws, req, args, domain) {
                             }
                         }, null, 1);
 
-                    } else {
+                    } else if (obj.agentExeMissing !== true) { // An agent that connected before its binary loaded had its core checked then
                         // Check the mesh core, if the agent is capable of running one
                         if (((obj.agentInfo.capabilities & 16) != 0) && (parent.parent.meshAgentsArchitectureNumbers[obj.agentInfo.agentId].core != null)) {
                             obj.sendBinary(common.ShortToStr(11) + common.ShortToStr(0)); // Command 11, ask for mesh core hash.
@@ -447,9 +470,12 @@ module.exports.CreateMeshAgent = function (parent, db, ws, req, args, domain) {
                 obj.receivedCommands += 1; // Agent can't send the same command twice on the same connection ever. Block DOS attack path.
 
                 if (isIgnoreHashCheck()) {
+                    // The server's TLS certificate hash is not checked in this mode, but we still
+                    // record the value the agent reported so the agent's signature can be verified.
+                    obj.agentSeenCerthash = msg.substring(2, 50);
                     // Send the agent web hash back to the agent
                     // Send 384 bits SHA384 hash of TLS cert + 384 bits nonce
-                    obj.sendBinary(common.ShortToStr(1) + msg.substring(2, 50) + obj.nonce); // Command 1, hash + nonce. Use the web hash given by the agent.
+                    obj.sendBinary(common.ShortToStr(1) + obj.agentSeenCerthash + obj.nonce); // Command 1, hash + nonce. Use the web hash given by the agent.
                 } else {
                     // Check that the server hash matches our own web certificate hash (SHA384)
                     obj.agentSeenCerthash = msg.substring(2, 50);
@@ -677,6 +703,15 @@ module.exports.CreateMeshAgent = function (parent, db, ws, req, args, domain) {
 
         // If this is a recovery agent
         if (obj.agentInfo.capabilities & 0x40) {
+            if (args.disablerecoveryagent === true) { obj.close(1); return; }
+
+          // Recovery agents must belong to an existing device group, otherwise hold the connection.
+            if (parent.meshes[obj.dbMeshKey] == null) {
+                parent.agentStats.recoveryAgentInvalidMeshCount = (parent.agentStats.recoveryAgentInvalidMeshCount || 0) + 1;
+                parent.parent.debug('agent', 'Recovery agent connected with invalid domain/mesh, holding connection (' + obj.remoteaddrport + ', ' + obj.dbMeshKey + ').');
+                return;
+            }
+
             // Inform mesh agent that it's authenticated.
             delete obj.pendingCompleteAgentConnection;
             obj.authenticated = 2;
@@ -746,7 +781,14 @@ module.exports.CreateMeshAgent = function (parent, db, ws, req, args, domain) {
             var device, mesh;
 
             // See if this node exists in the database
-            if ((nodes == null) || (nodes.length == 0)) {
+            const nodeExists = ((nodes != null) && (nodes.length > 0));
+            if (isAgentConnectionAllowedByEnrollmentPolicy(parent.parent.config.settings, domain, obj.remoteaddr, nodeExists) == false) {
+                parent.blockedAgents++;
+                parent.parent.debug('agent', 'New agent from blocked IP address ' + obj.remoteaddr + ', holding connection.');
+                return;
+            }
+
+            if (nodeExists == false) {
                 // This device does not exist, use the meshid given by the device
 
                 // Check if we already have too many devices for this domain
@@ -864,6 +906,15 @@ module.exports.CreateMeshAgent = function (parent, db, ws, req, args, domain) {
             return;
         }
 
+        // Enforce the source IP limit only after confirming that this is a new node.
+        // This operation is synchronous so concurrent registrations cannot pass the limit.
+        if (parent.recordAgentRegistration(obj.remoteaddr) == false) {
+            parent.blockedAgents++;
+            parent.agentStats.agentRegistrationBlockCount++;
+            parent.parent.debug('agent', 'New agent registration limit reached for ' + obj.remoteaddr + ', holding connection.');
+            return;
+        }
+
         // Mark when this device connected
         obj.connectTime = Date.now();
 
@@ -958,12 +1009,32 @@ module.exports.CreateMeshAgent = function (parent, db, ws, req, args, domain) {
             // Ask the agent for it's executable binary hash
             obj.sendBinary(common.ShortToStr(12) + common.ShortToStr(0));
         } else {
+            // Default agent binaries can still be downloading, obj.updateAgentExeInfo() checks this agent once its binary loads.
+            if (obj.agentExeInfo == null) { obj.agentExeMissing = true; }
+
             // Check the mesh core, if the agent is capable of running one
             if (((obj.agentInfo.capabilities & 16) != 0) && (corename != null)) {
                 obj.sendBinary(common.ShortToStr(11) + common.ShortToStr(0)); // Command 11, ask for mesh core hash.
             } else {
                 agentCoreIsStable(); // No updates needed, agent is ready to go.
             }
+        }
+    }
+
+    // Called after the server reloads its agent binaries, so agents that connected before use the new entries.
+    obj.updateAgentExeInfo = function () {
+        if ((obj.authenticated != 2) || (obj.agentUpdate != null)) return; // A native update keeps sending the binary it started with
+        if ((obj.agentExeInfo == null) && (obj.agentExeMissing !== true)) return; // Recovery agents and agents reconnecting too often never got an update check
+        const missing = (obj.agentExeInfo == null);
+        obj.agentExeInfo = parent.parent.meshAgentBinaries[obj.agentInfo.agentId];
+        if (domain.meshAgentBinaries && domain.meshAgentBinaries[obj.agentInfo.agentId]) { obj.agentExeInfo = domain.meshAgentBinaries[obj.agentInfo.agentId]; }
+        if (missing && (obj.agentExeInfo != null)) {
+            // Do the checks this agent skipped when it connected without a binary
+            if (obj.agentExeInfo.update == true) {
+                parent.parent.debug('agent', 'Agent binary loaded after connect, checking agent ' + obj.nodeid);
+                obj.sendBinary(common.ShortToStr(12) + common.ShortToStr(0)); // Command 12, ask for the agent binary hash.
+            }
+            obj.sendUpdatedIntelAmtPolicy();
         }
     }
 
@@ -1134,46 +1205,44 @@ module.exports.CreateMeshAgent = function (parent, db, ws, req, args, domain) {
 
     // Verify the agent signature
     function processAgentSignature(msg) {
-        if (isIgnoreHashCheck() == false) {
-            var verified = false;
+        var verified = false;
 
-            // This agent did not report a valid TLS certificate hash, fail now.
-            if (obj.agentSeenCerthash == null) return false;
+        // This agent did not report a valid TLS certificate hash, fail now.
+        if (obj.agentSeenCerthash == null) return false;
 
-            // Raw RSA signatures have an exact length of 256 or 384. PKCS7 is larger.
-            if ((msg.length != 384) && (msg.length != 256)) {
-                // Verify a PKCS7 signature.
-                var msgDer = null;
-                try { msgDer = forge.asn1.fromDer(forge.util.createBuffer(msg, 'binary')); } catch (ex) { }
-                if (msgDer != null) {
-                    try {
-                        const p7 = forge.pkcs7.messageFromAsn1(msgDer);
-                        const sig = p7.rawCapture.signature;
+        // Raw RSA signatures have an exact length of 256 or 384. PKCS7 is larger.
+        if ((msg.length != 384) && (msg.length != 256)) {
+            // Verify a PKCS7 signature.
+            var msgDer = null;
+            try { msgDer = forge.asn1.fromDer(forge.util.createBuffer(msg, 'binary')); } catch (ex) { }
+            if (msgDer != null) {
+                try {
+                    const p7 = forge.pkcs7.messageFromAsn1(msgDer);
+                    const sig = p7.rawCapture.signature;
 
-                        // Verify with key hash
-                        var buf = Buffer.from(obj.agentSeenCerthash + obj.nonce + obj.agentnonce, 'binary');
-                        var verifier = parent.crypto.createVerify('RSA-SHA384');
-                        verifier.update(buf);
-                        verified = verifier.verify(obj.unauth.nodeCertPem, sig, 'binary');
-                        if (verified !== true) {
-                            // Not a valid signature
-                            parent.agentStats.invalidPkcsSignatureCount++;
-                            parent.setAgentIssue(obj, "invalidPkcsSignature");
-                            return false;
-                        }
-                    } catch (ex) { };
-                }
+                    // Verify with key hash
+                    var buf = Buffer.from(obj.agentSeenCerthash + obj.nonce + obj.agentnonce, 'binary');
+                    var verifier = parent.crypto.createVerify('RSA-SHA384');
+                    verifier.update(buf);
+                    verified = verifier.verify(obj.unauth.nodeCertPem, sig, 'binary');
+                    if (verified !== true) {
+                        // Not a valid signature
+                        parent.agentStats.invalidPkcsSignatureCount++;
+                        parent.setAgentIssue(obj, "invalidPkcsSignature");
+                        return false;
+                    }
+                } catch (ex) { };
             }
+        }
 
-            if (verified == false) {
-                // Verify the RSA signature. This is the fast way, without using forge.
-                const verify = parent.crypto.createVerify('SHA384');
-                verify.end(Buffer.from(obj.agentSeenCerthash + obj.nonce + obj.agentnonce, 'binary')); // Test using the private key hash
-                if (verify.verify(obj.unauth.nodeCertPem, Buffer.from(msg, 'binary')) !== true) {
-                    parent.agentStats.invalidRsaSignatureCount++;
-                    parent.setAgentIssue(obj, "invalidRsaSignature");
-                    return false;
-                }
+        if (verified == false) {
+            // Verify the RSA signature. This is the fast way, without using forge.
+            const verify = parent.crypto.createVerify('SHA384');
+            verify.end(Buffer.from(obj.agentSeenCerthash + obj.nonce + obj.agentnonce, 'binary')); // Test using the private key hash
+            if (verify.verify(obj.unauth.nodeCertPem, Buffer.from(msg, 'binary')) !== true) {
+                parent.agentStats.invalidRsaSignatureCount++;
+                parent.setAgentIssue(obj, "invalidRsaSignature");
+                return false;
             }
         }
 
@@ -1206,6 +1275,12 @@ module.exports.CreateMeshAgent = function (parent, db, ws, req, args, domain) {
                 return;
             }
             if (typeof command != 'object') { return; }
+            // Recovery and diagnostic agents are not a device in the database, only allow the commands they need.
+            if ((obj.agentInfo.capabilities & 0x40) && (['msg', 'coreinfo', 'diagnostic', 'ping', 'pong'].indexOf(command.action) == -1)) {
+                parent.agentStats.recoveryAgentBlockedCommandCount = (parent.agentStats.recoveryAgentBlockedCommandCount || 0) + 1;
+                parent.parent.debug('agent', 'Recovery agent sent blocked command "' + String(command.action).substring(0, 32) + '" (' + obj.remoteaddrport + ').');
+                return;
+            }
             switch (command.action) {
                 case 'msg':
                     {
@@ -1243,9 +1318,7 @@ module.exports.CreateMeshAgent = function (parent, db, ws, req, args, domain) {
 
                                 // Agent update. The recovery core was loaded in the agent, send a command to update the agent
                                 obj.agentCoreUpdateTaskId = taskid;
-                                const getme = new URL(obj.agentExeInfo.url);
-                                const url = '*' + getme.pathname + getme.search;
-                                var cmd = { action: 'agentupdate', url: url, hash: obj.agentExeInfo.hashhex };
+                                var cmd = { action: 'agentupdate', url: getAgentUpdateUrl(), hash: obj.agentExeInfo.hashhex };
                                 parent.parent.debug('agentupdate', "Sending agent update url: " + cmd.url);
 
                                 // Add the hash
@@ -1304,6 +1377,10 @@ module.exports.CreateMeshAgent = function (parent, db, ws, req, args, domain) {
                         command.type = 'ifinfo';
                         db.Set(command);
 
+						if (typeof command.probableMainLanIP == 'string') {
+							ChangeAgentProbableMainLanIp(command.probableMainLanIP);
+						}
+
                         // Event the node interface information change
                         parent.parent.DispatchEvent(parent.CreateMeshDispatchTargets(obj.meshid, [obj.dbNodeKey]), obj, { action: 'ifchange', nodeid: obj.dbNodeKey, domain: domain.id, nolog: 1 });
 
@@ -1334,12 +1411,12 @@ module.exports.CreateMeshAgent = function (parent, db, ws, req, args, domain) {
                 case 'log':
                     {
                         // Log a value in the event log
-                        if ((typeof command.msg == 'string') && (command.msg.length < 4096)) {
+                        if ((typeof command.msg == 'string') && (command.msg.length < 4096) && (parent.meshes[obj.dbMeshKey] != null)) {
                             var event = { etype: 'node', action: 'agentlog', nodeid: obj.dbNodeKey, domain: domain.id, msg: command.msg };
                             if (typeof command.msgid == 'number') { event.msgid = command.msgid; }
-                            if (typeof command.guestname == 'string') { event.guestname = command.guestname; }
-                            if (Array.isArray(command.msgArgs)) { event.msgArgs = command.msgArgs; }
-                            if (typeof command.remoteaddr == 'string') { event.remoteaddr = command.remoteaddr; }
+                            if ((typeof command.guestname == 'string') && (command.guestname.length <= 256)) { event.guestname = command.guestname; }
+                            if (Array.isArray(command.msgArgs) && (command.msgArgs.length <= 32)) { event.msgArgs = command.msgArgs.map(function (a) { return (typeof a == 'string') ? a.substring(0, 1024) : (((typeof a == 'number') || (typeof a == 'boolean')) ? a : null); }); }
+                            if ((typeof command.remoteaddr == 'string') && (command.remoteaddr.length <= 64) && /^[0-9a-fA-F:.%\[\]]*$/.test(command.remoteaddr)) { event.remoteaddr = command.remoteaddr; } // IPv4 / IPv6 address only
                             var targets = parent.CreateMeshDispatchTargets(obj.dbMeshKey, [obj.dbNodeKey]);
                             if (typeof command.userid == 'string') {
                                 var loguser = parent.users[command.userid];
@@ -1375,8 +1452,22 @@ module.exports.CreateMeshAgent = function (parent, db, ws, req, args, domain) {
                                     if (((obj.agentInfo.capabilities & 0x40) == 0) && (typeof command.value.value == 'string') && (command.value.value.length == 64)) {
                                         // Store links to diagnostic agent id
                                         var daNodeKey = 'node/' + domain.id + '/' + db.escapeBase64(command.value.value);
-                                        db.Set({ _id: 'da' + daNodeKey, domain: domain.id, time: obj.connectTime, raid: obj.dbNodeKey });  // DiagnosticAgent --> Agent
-                                        db.Set({ _id: 'ra' + obj.dbNodeKey, domain: domain.id, time: obj.connectTime, daid: daNodeKey });  // Agent --> DiagnosticAgent
+                                        db.Get('ra' + obj.dbNodeKey, function (err, nodes) {
+                                            // Remove the link of a previous diagnostic agent, if any
+                                            if ((nodes != null) && (nodes.length == 1) && (nodes[0].daid != daNodeKey)) { db.Remove('da' + nodes[0].daid); }
+                                            db.Set({ _id: 'da' + daNodeKey, domain: domain.id, time: obj.connectTime, raid: obj.dbNodeKey });  // DiagnosticAgent --> Agent
+                                            db.Set({ _id: 'ra' + obj.dbNodeKey, domain: domain.id, time: obj.connectTime, daid: daNodeKey });  // Agent --> DiagnosticAgent
+                                        });
+                                    }
+                                    break;
+                                }
+                                case 'unregister': {
+                                    // Only main agent can do this, remove the links to its diagnostic agent
+                                    if ((obj.agentInfo.capabilities & 0x40) == 0) {
+                                        db.Get('ra' + obj.dbNodeKey, function (err, nodes) {
+                                            if ((nodes != null) && (nodes.length == 1)) { db.Remove('da' + nodes[0].daid); }
+                                            db.Remove('ra' + obj.dbNodeKey);
+                                        });
                                     }
                                     break;
                                 }
@@ -1402,7 +1493,7 @@ module.exports.CreateMeshAgent = function (parent, db, ws, req, args, domain) {
                                     break;
                                 }
                                 case 'log': {
-                                    if (((obj.agentInfo.capabilities & 0x40) != 0) && (typeof command.value.value == 'string') && (command.value.value.length < 256)) {
+                                    if (((obj.agentInfo.capabilities & 0x40) != 0) && (typeof command.value.value == 'string') && (command.value.value.length < 256) && (parent.meshes[obj.dbMeshKey] != null)) {
                                         // If this is a diagnostic agent, log the event in the log of the main agent
                                         var event = { etype: 'node', action: 'diagnostic', nodeid: obj.realNodeKey, snodeid: obj.dbNodeKey, domain: domain.id, msg: command.value.value };
                                         parent.parent.DispatchEvent(parent.CreateMeshDispatchTargets(obj.dbMeshKey, [obj.dbNodeKey]), obj, event);
@@ -1587,9 +1678,7 @@ module.exports.CreateMeshAgent = function (parent, db, ws, req, args, domain) {
 
                             // Agent is requesting an agent update
                             obj.agentCoreUpdateTaskId = taskid;
-                            const getme = new URL(obj.agentExeInfo.url);
-                            const url = '*' + getme.pathname + getme.search;
-                            var cmd = { action: 'agentupdate', url: url, hash: obj.agentExeInfo.hashhex, sessionid: agentUpdateFunc.sessionid };
+                            var cmd = { action: 'agentupdate', url: getAgentUpdateUrl(), hash: obj.agentExeInfo.hashhex, sessionid: agentUpdateFunc.sessionid };
                             parent.parent.debug('agentupdate', "Sending user requested agent update url: " + cmd.url);
 
                             // Add the hash
@@ -1996,6 +2085,70 @@ module.exports.CreateMeshAgent = function (parent, db, ws, req, args, domain) {
         });
     }
 
+	function ChangeAgentProbableMainLanIp(ip) {
+		if ((obj.agentInfo == null) || (obj.agentInfo.capabilities & 0x40)) return;
+		if ((typeof ip != 'string') || (ip.length > 64)) return;
+
+		// Very light sanity check. Keep this IPv4-only because the agent field is IPv4-only.
+		if (/^\d{1,3}(\.\d{1,3}){3}$/.test(ip) == false) return;
+
+		// Check that the mesh exists.
+		const mesh = parent.meshes[obj.dbMeshKey];
+		if (mesh == null) return;
+
+		// If the device is pending a change, hold.
+		if (obj.deviceChanging === true) {
+			setTimeout(function () { ChangeAgentProbableMainLanIp(ip); }, 100);
+			return;
+		}
+
+		obj.deviceChanging = true;
+
+		db.Get(obj.dbNodeKey, function (err, nodes) {
+			if ((nodes == null) || (nodes.length != 1)) {
+				delete obj.deviceChanging;
+				return;
+			}
+
+			const device = nodes[0];
+
+			if (device.agent) {
+				var change = 0;
+
+				if (device.probableMainLanIP != ip) {
+					device.probableMainLanIP = ip;
+					change = 1;
+				}
+
+				if (change == 1) {
+					// These should not be saved into the node document.
+					if (device.conn != null) { delete device.conn; }
+					if (device.pwr != null) { delete device.pwr; }
+					if (device.agct != null) { delete device.agct; }
+					if (device.cict != null) { delete device.cict; }
+
+					db.Set(device);
+
+					var event = {
+						etype: 'node',
+						action: 'changenode',
+						nodeid: obj.dbNodeKey,
+						domain: domain.id,
+						node: parent.CloneSafeNode(device),
+						msg: 'Changed device ' + device.name + ' from group ' + mesh.name + ': probable main LAN IP',
+						nolog: 1
+					};
+
+					if (db.changeStream) { event.noact = 1; }
+
+					parent.parent.DispatchEvent(parent.CreateMeshDispatchTargets(device.meshid, [obj.dbNodeKey]), obj, event);
+				}
+			}
+
+			delete obj.deviceChanging;
+		});
+	}
+
     // Change the current core information string and event it
     function ChangeAgentLocationInfo(command) {
         if ((obj.agentInfo == null) || (obj.agentInfo.capabilities & 0x40)) return;
@@ -2138,6 +2291,13 @@ module.exports.CreateMeshAgent = function (parent, db, ws, req, args, domain) {
         });
     }
 
+    // The agent downloads its update without a web session, so the cookie is what gets it past lockAgentDownload.
+    // It is escaped because the agent's parseUri() takes whatever follows an "@" as the host.
+    function getAgentUpdateUrl() {
+        const getme = new URL(obj.agentExeInfo.url);
+        return '*' + getme.pathname + getme.search + '&auth=' + encodeURIComponent(parent.parent.encodeCookie({ a: 'aupd', i: obj.agentExeInfo.id }, parent.parent.loginCookieEncryptionKey));
+    }
+
     // Check if we need to update this agent, return true if agent binary update required.
     // Return 0 is no update needed, 1 update using native system, 2 update using meshcore system
     function compareAgentBinaryHash(agentExeInfo, agentHash) {
@@ -2153,7 +2313,7 @@ module.exports.CreateMeshAgent = function (parent, db, ws, req, args, domain) {
             if (domain.meshAgentBinaries && domain.meshAgentBinaries[10005]) {
                 if (domain.meshAgentBinaries[10005].hash == agentHash) return 0;
             } else {
-                if (parent.parent.meshAgentBinaries[10005].hash == agentHash) return 0;
+                if ((parent.parent.meshAgentBinaries[10005] != null) && (parent.parent.meshAgentBinaries[10005].hash == agentHash)) return 0; // No universal binary until its release file is downloaded or copied in
             }
         }
 
